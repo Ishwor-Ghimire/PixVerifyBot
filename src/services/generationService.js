@@ -21,14 +21,14 @@ const GenerationService = {
       return { success: false, error: 'INSUFFICIENT_CREDITS' };
     }
 
-    // 2. Create generation record
-    const generationId = Generation.create({
-      telegramUserId,
-      email,
-      creditsUsed: 1,
-    });
-
     try {
+      // 2. Create generation record
+      const generationId = Generation.create({
+        telegramUserId,
+        email,
+        creditsUsed: 1,
+      });
+
       // 3. Submit to external API
       const submission = await GoogleOneClient.submitJob(email, password, totpSecret);
 
@@ -97,15 +97,10 @@ const GenerationService = {
       }
     } catch (err) {
       // Unexpected error — refund and mark failed
-      logger.error('Generation unexpected error', { generationId, error: err.message });
-      Generation.updateStatus(generationId, {
-        status: 'failed',
-        errorCode: 'INTERNAL_ERROR',
-      });
+      logger.error('Generation unexpected error', { error: err.message });
       CreditService.refundCredits(telegramUserId, 1);
       return {
         success: false,
-        generationId,
         error: 'INTERNAL_ERROR',
         message: err.message,
       };

@@ -8,8 +8,6 @@ const MESSAGES = {
     'Before verification make sure you have your Google Mail (Gmail) address, Password and TOTP secret key ready.',
     '',
     'Use /help if you cannot find TOTP secret key or contact @PixVerify',
-    '',
-    'Use /menu to see available actions.',
   ].join('\n'),
 
   HELP: [

@@ -110,7 +110,7 @@ function register(bot) {
 
     await bot.answerCallbackQuery(query.id);
 
-    // Store that this user needs to submit an order ID
+    // Store that this user needs to submit a transaction ID
     pendingVerifications.set(userId, { orderId, chatId: query.message.chat.id });
 
     // Auto-expire after 30 minutes
@@ -123,11 +123,11 @@ function register(bot) {
       '',
       'Please send your *Binance Pay Order (Transaction) ID* now.',
       '',
-      '_You can find it in: Binance App → Pay → Transaction History → tap the transaction → copy the Order ID (also called Transaction ID)_',
+      '_You can find it in: Binance App → Pay → Transaction History → tap the transaction → copy the Order ID_',
     ].join('\n'), { parse_mode: 'Markdown' });
   });
 
-  // Listen for Binance order ID submission from users
+  // Listen for Binance order/transaction ID submission from users
   bot.on('message', async (msg) => {
     if (!msg.text || msg.text.startsWith('/')) return;
 
@@ -137,59 +137,75 @@ function register(bot) {
 
     const submittedId = msg.text.trim();
 
-    // Basic validation — Binance order IDs are typically numeric
+    // Basic validation
     if (submittedId.length < 5) {
-      return bot.sendMessage(msg.chat.id, '⚠️ That doesn\'t look like a valid Order ID. Please try again.');
+      return bot.sendMessage(msg.chat.id, '⚠️ That doesn\'t look like a valid Transaction ID. Please try again.');
     }
 
     pendingVerifications.delete(userId);
 
-    const waitMsg = await bot.sendMessage(msg.chat.id, '🔄 Verifying payment with Binance...');
-
+    // Save the transaction ID as payment reference on the order
     try {
-      const result = await PaymentService.verifyBinancePayment(pending.orderId, userId, submittedId);
-
-      if (result.success) {
-        await bot.editMessageText([
-          '✅ *Payment Verified!*',
-          '',
-          `💰 *${result.credits} credits* added to your balance.`,
-          `📋 Order #${pending.orderId}`,
-          '',
-          'Use /run to generate a link or /balance to check your balance.',
-        ].join('\n'), {
-          chat_id: msg.chat.id,
-          message_id: waitMsg.message_id,
-          parse_mode: 'Markdown',
-        });
-      } else {
-        // Verification failed — let user retry or contact admin
-        pendingVerifications.set(userId, pending); // re-add for retry
-
-        await bot.editMessageText([
-          '❌ *Verification Failed*',
-          '',
-          `Reason: ${result.reason}`,
-          '',
-          'You can:',
-          '• Send the Order ID again if you made a mistake',
-          '• Contact /support if the issue persists',
-          '• An admin can also verify manually',
-        ].join('\n'), {
-          chat_id: msg.chat.id,
-          message_id: waitMsg.message_id,
-          parse_mode: 'Markdown',
+      const Purchase = require('../../db/models/Purchase');
+      const purchase = Purchase.getById(pending.orderId);
+      if (purchase && purchase.payment_status === 'pending') {
+        Purchase.updateStatusIfPending(pending.orderId, {
+          paymentStatus: 'pending', // keep pending for admin
+          paymentReference: `binance_txid_${submittedId}`,
         });
       }
-    } catch (err) {
-      logger.error('Binance verification error', { error: err.message });
-      pendingVerifications.set(userId, pending);
-
-      await bot.editMessageText(
-        '⚠️ Verification service error. Please try again or contact /support.',
-        { chat_id: msg.chat.id, message_id: waitMsg.message_id }
-      );
+    } catch (e) {
+      logger.error('Error saving payment reference', { error: e.message });
     }
+
+    // Tell the user to wait
+    await bot.sendMessage(msg.chat.id, [
+      '✅ *Payment Submitted!*',
+      '',
+      `📋 Order #${pending.orderId}`,
+      `🔖 Transaction ID: \`${submittedId}\``,
+      '',
+      '⏳ Please wait for an admin to verify and confirm your payment.',
+      'You will be notified once your credits are added.',
+      '',
+      '_This usually takes a few minutes._',
+    ].join('\n'), { parse_mode: 'Markdown' });
+
+    // Notify all admins
+    const adminIds = config.admin.userIds;
+    const username = msg.from.username ? `@${msg.from.username}` : `ID:${userId}`;
+
+    for (const adminId of adminIds) {
+      try {
+        await bot.sendMessage(adminId, [
+          '🔔 *New Binance Pay Payment Submitted*',
+          '',
+          `👤 User: ${username} (ID: \`${userId}\`)`,
+          `📋 Order: #${pending.orderId}`,
+          `🔖 Transaction ID: \`${submittedId}\``,
+          '',
+          'Please verify this payment in your Binance app and then confirm or reject below.',
+        ].join('\n'), {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '✅ Confirm Payment', callback_data: `${CALLBACKS.ADMIN_CONFIRM}${pending.orderId}` },
+                { text: '❌ Reject', callback_data: `${CALLBACKS.ADMIN_REJECT}${pending.orderId}` },
+              ],
+            ],
+          },
+        });
+      } catch (e) {
+        logger.error('Failed to notify admin', { adminId, error: e.message });
+      }
+    }
+
+    logger.info('Binance payment submitted for admin review', {
+      orderId: pending.orderId,
+      userId,
+      transactionId: submittedId,
+    });
   });
 
   // Handle pay cancel
@@ -268,10 +284,8 @@ async function handleUsdtTrc20Payment(bot, chatId, userId, pkg) {
 async function handleBinanceTransfer(bot, chatId, userId, pkg) {
   const order = PaymentService.createBinanceTransferOrder(userId, pkg);
 
-  const hasAutoVerify = config.payment.binanceTransfer.autoVerifyEnabled;
-
   const msg = [
-    '🟡 *Binance Transfer Payment*',
+    '🟡 *Binance Pay Payment*',
     '',
     `📋 Order #${order.orderId}`,
     `📦 Package: *${pkg.label}*`,
@@ -284,20 +298,19 @@ async function handleBinanceTransfer(bot, chatId, userId, pkg) {
     '1. Open *Binance App* → *Pay* → *Send*',
     '2. Enter the Pay ID above',
     `3. Send exactly *$${pkg.price} USDT*`,
-    hasAutoVerify
-      ? '4. After sending, tap *"I\'ve Paid"* below and send your Binance Order ID'
-      : '4. After sending, contact support with your Order ID',
+    '4. After sending, tap *"I\'ve Paid"* below and send your Transaction ID',
+    '',
+    '⏱️ This order expires in 60 minutes.',
   ].join('\n');
-
-  const buttons = [];
-  if (hasAutoVerify) {
-    buttons.push([{ text: '✅ I\'ve Paid', callback_data: `${CALLBACKS.BINANCE_PAID}${order.orderId}` }]);
-  }
-  buttons.push([{ text: '❌ Cancel', callback_data: CALLBACKS.PAY_CANCEL }]);
 
   await bot.sendMessage(chatId, msg, {
     parse_mode: 'Markdown',
-    reply_markup: { inline_keyboard: buttons },
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '✅ I\'ve Paid', callback_data: `${CALLBACKS.BINANCE_PAID}${order.orderId}` }],
+        [{ text: '❌ Cancel', callback_data: CALLBACKS.PAY_CANCEL }],
+      ],
+    },
   });
 }
 

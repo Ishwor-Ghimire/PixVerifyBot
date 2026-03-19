@@ -260,25 +260,24 @@ async function startConfirmFlow(bot, chatId, adminId, inputOrderId) {
 async function handleAdminConfirm(bot, query) {
   const adminId = query.from.id;
   const orderId = parseInt(query.data.replace(CALLBACKS.ADMIN_CONFIRM, ''), 10);
-  const confirmKey = `admin_confirm_${orderId}_${adminId}`;
-  
-  if (!pendingConfirmations.has(confirmKey)) {
-    return bot.answerCallbackQuery(query.id, { text: 'Confirmation expired. Use /confirm again.' });
-  }
 
   const purchase = Purchase.getById(orderId);
-  if (!purchase || purchase.payment_status !== 'pending') {
-    pendingConfirmations.delete(confirmKey);
-    return bot.answerCallbackQuery(query.id, { text: 'Order no longer pending.' });
+  if (!purchase) {
+    return bot.answerCallbackQuery(query.id, { text: 'Order not found.' });
+  }
+  if (purchase.payment_status !== 'pending') {
+    return bot.answerCallbackQuery(query.id, { text: `Order already ${purchase.payment_status}.` });
   }
 
   const confirmation = PaymentService.confirmPayment(orderId, `manual_admin_${adminId}_${Date.now()}`);
   if (!confirmation.success) {
-    pendingConfirmations.delete(confirmKey);
     return bot.answerCallbackQuery(query.id, { text: confirmation.error });
   }
 
+  // Clean up any pending confirmation entry
+  const confirmKey = `admin_confirm_${orderId}_${adminId}`;
   pendingConfirmations.delete(confirmKey);
+
   logger.info('Admin confirmed payment', { orderId, adminId, credits: purchase.credits_added });
 
   await bot.answerCallbackQuery(query.id, { text: '✅ Payment confirmed!' });
@@ -298,7 +297,7 @@ async function handleAdminConfirm(bot, query) {
       '✅ *Payment Confirmed!*', '',
       `💰 *${purchase.credits_added} credits* added to your balance.`,
       `📋 Order #${orderId}`, '',
-      'Use /run to generate a link or /balance to check your balance.',
+      'Use /run to start verification or /balance to check your balance.',
     ].join('\n'), { parse_mode: 'Markdown' });
   } catch {}
 }

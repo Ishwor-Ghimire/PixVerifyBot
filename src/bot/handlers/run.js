@@ -208,9 +208,18 @@ async function handleConfirm(bot, query) {
     }
   } catch (err) {
     logger.error('Run handler error', { userId, error: err.message });
+
+    // Safety net: refund credit if anything went wrong
+    try {
+      CreditService.refundCredits(userId, 1);
+      logger.info('Safety refund issued from run handler catch', { userId });
+    } catch (refundErr) {
+      logger.error('Safety refund failed', { userId, error: refundErr.message });
+    }
+
     try {
       await bot.editMessageText(
-        `${MESSAGES.ERROR_GENERIC}\n\n💰 If credit was deducted, it has been refunded.`,
+        `${MESSAGES.ERROR_GENERIC}\n\n💰 Your credit has been refunded.`,
         { chat_id: chatId, message_id: statusMsg.message_id }
       );
     } catch {}
