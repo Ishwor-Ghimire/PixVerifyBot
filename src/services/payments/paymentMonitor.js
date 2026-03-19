@@ -43,10 +43,17 @@ const PaymentMonitor = {
       const pending = Purchase.getPending();
       if (pending.length === 0) return;
 
+      logger.info('Payment monitor cycle', {
+        pendingCount: pending.length,
+        orders: pending.map(p => ({
+          id: p.id,
+          provider: p.payment_provider,
+          uniqueAmount: p.unique_amount,
+        })),
+      });
+
       for (const purchase of pending) {
         try {
-          // Only auto-check USDT BEP-20 payments
-          // Binance Transfer orders are confirmed manually by admin
           if (purchase.payment_provider === 'usdt_bep20') {
             await this.checkUsdtPayment(purchase);
           } else if (purchase.payment_provider === 'usdt_trc20') {
@@ -56,6 +63,7 @@ const PaymentMonitor = {
           logger.error('Payment check error', {
             purchaseId: purchase.id,
             error: err.message,
+            stack: err.stack,
           });
         }
       }
@@ -68,17 +76,37 @@ const PaymentMonitor = {
 
   async checkUsdtPayment(purchase) {
     const expectedAmount = parseFloat(purchase.unique_amount);
-    if (!expectedAmount) return;
+    if (!expectedAmount) {
+      logger.warn('BEP-20 order has no unique_amount', { purchaseId: purchase.id });
+      return;
+    }
+
+    logger.info('Checking BEP-20 payment', {
+      purchaseId: purchase.id,
+      expectedAmount,
+      createdAt: purchase.created_at,
+    });
 
     const orderTimestamp = Math.floor(new Date(purchase.created_at).getTime() / 1000) - 60;
 
     const tx = await UsdtBep20Service.findMatchingTransfer(expectedAmount, orderTimestamp);
-    if (!tx) return;
+
+    if (!tx) {
+      logger.info('No matching BEP-20 transfer found yet', { purchaseId: purchase.id, expectedAmount });
+      return;
+    }
+
+    logger.info('BEP-20 transfer MATCHED!', {
+      purchaseId: purchase.id,
+      txHash: tx.hash,
+      txAmount: tx.amount,
+      expectedAmount,
+    });
 
     const confirmed = await this.confirmPurchase(purchase, tx.hash);
     if (!confirmed) return;
 
-    logger.info('USDT BEP-20 payment detected', {
+    logger.info('USDT BEP-20 payment confirmed', {
       purchaseId: purchase.id,
       txHash: tx.hash,
       amount: tx.amount,

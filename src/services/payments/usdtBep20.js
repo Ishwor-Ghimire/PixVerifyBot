@@ -142,12 +142,21 @@ const UsdtBep20Service = {
    */
   async findMatchingTransfer(expectedAmount, afterTimestamp) {
     const transfers = await this.getRecentTransfers();
-    const tolerance = 0.001; // 0.1 cent tolerance for 3-decimal precision
+    const tolerance = 0.001;
+
+    if (transfers.length > 0) {
+      logger.info('BEP-20 findMatchingTransfer comparing', {
+        expectedAmount,
+        tolerance,
+        transferCount: transfers.length,
+        transferAmounts: transfers.slice(0, 10).map(t => t.amount),
+      });
+    }
 
     for (const tx of transfers) {
-      // Skip transfers from before the order was created (using block-based timing)
-      // Since RPC logs don't always have timestamps, we rely on the block range filter
-      if (Math.abs(tx.amount - expectedAmount) < tolerance) {
+      const diff = Math.abs(tx.amount - expectedAmount);
+      if (diff < tolerance) {
+        logger.info('BEP-20 MATCH found', { txHash: tx.hash, txAmount: tx.amount, expectedAmount, diff });
         return tx;
       }
     }
