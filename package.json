@@ -1,0 +1,20 @@
+{
+  "name": "pixverifybot",
+  "version": "1.0.0",
+  "description": "Production-ready Telegram bot for Google One verification link generation",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "keywords": ["telegram", "bot", "verification"],
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "node-telegram-bot-api": "^0.66.0",
+    "better-sqlite3": "^11.7.0",
+    "axios": "^1.7.0",
+    "dotenv": "^16.4.0",
+    "winston": "^3.14.0"
+  }
+}
