@@ -1,10 +1,11 @@
 const Purchase = require('../../db/models/Purchase');
-const CreditService = require('../creditService');
 const UsdtBep20Service = require('./usdtBep20');
+const PaymentService = require('../paymentService');
 const logger = require('../../utils/logger');
 
 let monitorInterval = null;
 let botInstance = null;
+let isChecking = false;
 
 /**
  * Background payment monitor.
@@ -32,6 +33,11 @@ const PaymentMonitor = {
   },
 
   async checkPendingPayments() {
+    if (isChecking) {
+      return;
+    }
+
+    isChecking = true;
     try {
       const pending = Purchase.getPending();
       if (pending.length === 0) return;
@@ -52,6 +58,8 @@ const PaymentMonitor = {
       }
     } catch (err) {
       logger.error('Payment monitor cycle error', { error: err.message });
+    } finally {
+      isChecking = false;
     }
   },
 
@@ -64,7 +72,9 @@ const PaymentMonitor = {
     const tx = await UsdtBep20Service.findMatchingTransfer(expectedAmount, orderTimestamp);
     if (!tx) return;
 
-    await this.confirmPurchase(purchase, tx.hash);
+    const confirmed = await this.confirmPurchase(purchase, tx.hash);
+    if (!confirmed) return;
+
     logger.info('USDT BEP-20 payment detected', {
       purchaseId: purchase.id,
       txHash: tx.hash,
@@ -73,12 +83,10 @@ const PaymentMonitor = {
   },
 
   async confirmPurchase(purchase, reference) {
-    Purchase.updateStatus(purchase.id, {
-      paymentStatus: 'completed',
-      paymentReference: reference,
-    });
-
-    CreditService.addCredits(purchase.telegram_user_id, purchase.credits_added);
+    const result = PaymentService.confirmPayment(purchase.id, reference);
+    if (!result.success) {
+      return false;
+    }
 
     if (botInstance) {
       try {
@@ -101,6 +109,8 @@ const PaymentMonitor = {
         });
       }
     }
+
+    return true;
   },
 };
 

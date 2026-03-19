@@ -145,7 +145,7 @@ function register(bot) {
     const waitMsg = await bot.sendMessage(msg.chat.id, '🔄 Verifying payment with Binance...');
 
     try {
-      const result = await PaymentService.verifyBinancePayment(pending.orderId, submittedId);
+      const result = await PaymentService.verifyBinancePayment(pending.orderId, userId, submittedId);
 
       if (result.success) {
         await bot.editMessageText([
@@ -238,7 +238,7 @@ async function handleUsdtPayment(bot, chatId, userId, pkg) {
 async function handleBinanceTransfer(bot, chatId, userId, pkg) {
   const order = PaymentService.createBinanceTransferOrder(userId, pkg);
 
-  const hasAutoVerify = config.payment.binanceTransfer.apiKey;
+  const hasAutoVerify = config.payment.binanceTransfer.autoVerifyEnabled;
 
   const msg = [
     '🟡 *Binance Transfer Payment*',
@@ -255,7 +255,7 @@ async function handleBinanceTransfer(bot, chatId, userId, pkg) {
     '2. Enter the Pay ID above',
     `3. Send exactly *$${pkg.price} USDT*`,
     hasAutoVerify
-      ? '4. After sending, tap *"I\'ve Paid"* below and provide your Order ID'
+      ? '4. After sending, tap *"I\'ve Paid"* below and send your Binance Order ID'
       : '4. After sending, contact support with your Order ID',
   ].join('\n');
 

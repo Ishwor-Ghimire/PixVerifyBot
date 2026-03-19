@@ -1,6 +1,7 @@
 const User = require('../../db/models/User');
 const Purchase = require('../../db/models/Purchase');
 const CreditService = require('../../services/creditService');
+const PaymentService = require('../../services/paymentService');
 const { MESSAGES, CALLBACKS } = require('../../utils/constants');
 const { formatDate } = require('../../utils/helpers');
 const logger = require('../../utils/logger');
@@ -138,7 +139,7 @@ function register(bot) {
       return bot.sendMessage(msg.chat.id, `⚠️ Order #${orderId} not found or not pending.`);
     }
 
-    Purchase.updateStatus(orderId, { paymentStatus: 'rejected' });
+    Purchase.updateStatusIfPending(orderId, { paymentStatus: 'rejected' });
     logger.info('Order rejected by admin', { orderId, adminId: msg.from.id });
 
     await bot.sendMessage(msg.chat.id, `🚫 Order #${orderId} has been rejected.`);
@@ -215,13 +216,16 @@ async function handleAdminConfirm(bot, query) {
     return;
   }
 
-  // Confirm payment
-  Purchase.updateStatus(orderId, {
-    paymentStatus: 'completed',
-    paymentReference: `manual_admin_${adminId}_${Date.now()}`,
-  });
+  const confirmation = PaymentService.confirmPayment(
+    orderId,
+    `manual_admin_${adminId}_${Date.now()}`
+  );
+  if (!confirmation.success) {
+    pendingConfirmations.delete(confirmKey);
+    await bot.answerCallbackQuery(query.id, { text: confirmation.error });
+    return;
+  }
 
-  CreditService.addCredits(purchase.telegram_user_id, purchase.credits_added);
   pendingConfirmations.delete(confirmKey);
 
   logger.info('Admin confirmed payment', { orderId, adminId, credits: purchase.credits_added });

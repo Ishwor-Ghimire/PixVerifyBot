@@ -31,6 +31,9 @@ function parseJSON(key, fallback) {
 }
 
 const CREDIT_PRICE = parseFloat(optional('CREDIT_PRICE_USD', '2.5'));
+const BINANCE_PAY_ID = optional('BINANCE_PAY_ID', '').trim();
+const BINANCE_API_KEY = optional('BINANCE_API_KEY', '').trim();
+const BINANCE_API_SECRET = optional('BINANCE_API_SECRET', '').trim();
 
 const config = Object.freeze({
   bot: {
@@ -82,10 +85,11 @@ const config = Object.freeze({
     },
 
     binanceTransfer: {
-      payId: optional('BINANCE_PAY_ID', ''),
-      apiKey: optional('BINANCE_API_KEY', ''),
-      apiSecret: optional('BINANCE_API_SECRET', ''),
-      enabled: !!process.env.BINANCE_PAY_ID,
+      payId: BINANCE_PAY_ID,
+      apiKey: BINANCE_API_KEY,
+      apiSecret: BINANCE_API_SECRET,
+      enabled: !!BINANCE_PAY_ID,
+      autoVerifyEnabled: !!(BINANCE_PAY_ID && BINANCE_API_KEY && BINANCE_API_SECRET),
     },
   },
 

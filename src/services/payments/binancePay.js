@@ -10,6 +10,13 @@ const BASE_URL = 'https://api.binance.com';
  * Uses HMAC-SHA256 signed requests with the user's API key.
  */
 const BinanceApiClient = {
+  isConfigured() {
+    return Boolean(
+      config.payment.binanceTransfer.apiKey &&
+      config.payment.binanceTransfer.apiSecret
+    );
+  },
+
   /**
    * Create HMAC-SHA256 signature for Binance API
    */
@@ -24,6 +31,10 @@ const BinanceApiClient = {
    * Make signed GET request to Binance API
    */
   async _signedGet(endpoint, params = {}) {
+    if (!this.isConfigured()) {
+      throw new Error('Binance API key/secret missing');
+    }
+
     const { apiKey } = config.payment.binanceTransfer;
     params.timestamp = Date.now();
     params.recvWindow = 10000;
@@ -56,12 +67,22 @@ const BinanceApiClient = {
         limit: 100,
       });
 
-      if (!Array.isArray(data)) {
+      const transactions = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.data)
+          ? data.data
+          : Array.isArray(data?.rows)
+            ? data.rows
+            : Array.isArray(data?.result)
+              ? data.result
+              : null;
+
+      if (!transactions) {
         logger.warn('Unexpected Pay transactions response', { data });
         return [];
       }
 
-      return data;
+      return transactions;
     } catch (err) {
       logger.error('Failed to fetch Pay transactions', {
         error: err.response?.data || err.message,
@@ -77,6 +98,7 @@ const BinanceApiClient = {
    */
   async verifyPayment(orderIdFromUser, expectedAmount) {
     try {
+      const requestedOrderId = String(orderIdFromUser).trim();
       const transactions = await this.getPayTransactions(120);
 
       if (transactions.length === 0) {
@@ -85,10 +107,10 @@ const BinanceApiClient = {
 
       // Search for matching transaction
       for (const tx of transactions) {
-        const txOrderId = tx.orderNumber || tx.transactionId || '';
+        const txOrderId = String(tx.orderNumber || tx.transactionId || tx.orderId || '').trim();
 
         // Match by order ID (user provides this from their Binance receipt)
-        if (txOrderId === orderIdFromUser) {
+        if (txOrderId === requestedOrderId) {
           const receivedAmount = parseFloat(tx.amount);
           const currency = tx.currency || 'USDT';
 

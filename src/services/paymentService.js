@@ -1,8 +1,9 @@
 const Purchase = require('../db/models/Purchase');
-const CreditService = require('./creditService');
 const UsdtBep20Service = require('./payments/usdtBep20');
 const BinanceApiClient = require('./payments/binancePay');
 const config = require('../config');
+const { getDb } = require('../db/database');
+const User = require('../db/models/User');
 const logger = require('../utils/logger');
 
 const PaymentService = {
@@ -63,13 +64,31 @@ const PaymentService = {
    * Verify a Binance Transfer using the order ID from user's receipt.
    * Queries Binance API to confirm the payment was received.
    */
-  async verifyBinancePayment(purchaseId, binanceOrderId) {
+  async verifyBinancePayment(purchaseId, telegramUserId, binanceOrderId) {
+    if (!config.payment.binanceTransfer.autoVerifyEnabled) {
+      return {
+        success: false,
+        reason: 'Automatic Binance verification is not configured yet. Please contact support.',
+      };
+    }
+
     const purchase = Purchase.getById(purchaseId);
     if (!purchase) {
       return { success: false, reason: 'Order not found.' };
     }
-    if (purchase.payment_status === 'completed') {
-      return { success: false, reason: 'Order already confirmed.' };
+    if (purchase.telegram_user_id !== telegramUserId) {
+      return { success: false, reason: 'That order does not belong to your account.' };
+    }
+    if (purchase.payment_provider !== 'binance_transfer') {
+      return { success: false, reason: 'This order cannot be verified with Binance.' };
+    }
+    if (purchase.payment_status !== 'pending') {
+      return {
+        success: false,
+        reason: purchase.payment_status === 'completed'
+          ? 'Order already confirmed.'
+          : `Order is already ${purchase.payment_status}.`,
+      };
     }
 
     const expectedAmount = parseFloat(purchase.amount);
@@ -84,44 +103,63 @@ const PaymentService = {
       return { success: false, reason: result.reason };
     }
 
-    // Payment verified — confirm and add credits
-    Purchase.updateStatus(purchaseId, {
-      paymentStatus: 'completed',
-      paymentReference: `binance_${binanceOrderId}`,
-    });
-
-    CreditService.addCredits(purchase.telegram_user_id, purchase.credits_added);
+    const confirmation = this.confirmPayment(purchaseId, `binance_${binanceOrderId}`);
+    if (!confirmation.success) {
+      return {
+        success: false,
+        reason: confirmation.error === 'Already confirmed'
+          ? 'Order already confirmed.'
+          : confirmation.error,
+      };
+    }
 
     logger.info('Binance payment auto-verified', {
       purchaseId,
       binanceOrderId,
-      credits: purchase.credits_added,
+      credits: confirmation.credits,
     });
 
-    return { success: true, credits: purchase.credits_added };
+    return { success: true, credits: confirmation.credits };
   },
 
   /**
    * Confirm payment manually (used by admin /confirm).
    */
   confirmPayment(orderId, paymentReference = null) {
-    const purchase = Purchase.getById(orderId);
-    if (!purchase) {
-      return { success: false, error: 'Order not found' };
+    const db = getDb();
+    const result = db.transaction(() => {
+      const purchase = Purchase.getById(orderId);
+      if (!purchase) {
+        return { success: false, error: 'Order not found' };
+      }
+      if (purchase.payment_status === 'completed') {
+        return { success: false, error: 'Already confirmed' };
+      }
+      if (purchase.payment_status !== 'pending') {
+        return { success: false, error: `Order is ${purchase.payment_status}` };
+      }
+
+      const update = Purchase.updateStatusIfPending(orderId, {
+        paymentStatus: 'completed',
+        paymentReference,
+      });
+      if (update.changes !== 1) {
+        return { success: false, error: 'Already confirmed' };
+      }
+
+      User.updateBalance(purchase.telegram_user_id, purchase.credits_added);
+      return {
+        success: true,
+        credits: purchase.credits_added,
+        telegramUserId: purchase.telegram_user_id,
+      };
+    })();
+
+    if (result.success) {
+      logger.info('Payment confirmed', { orderId, credits: result.credits });
     }
-    if (purchase.payment_status === 'completed') {
-      return { success: false, error: 'Already confirmed' };
-    }
 
-    Purchase.updateStatus(orderId, {
-      paymentStatus: 'completed',
-      paymentReference,
-    });
-
-    CreditService.addCredits(purchase.telegram_user_id, purchase.credits_added);
-    logger.info('Payment confirmed', { orderId, credits: purchase.credits_added });
-
-    return { success: true, credits: purchase.credits_added };
+    return result;
   },
 
   getHistory(telegramUserId) {

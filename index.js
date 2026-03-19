@@ -18,7 +18,7 @@ async function main() {
 
   const enabledMethods = [];
   if (config.payment.usdt.enabled) enabledMethods.push('USDT BEP-20');
-  if (config.payment.binancePay.enabled) enabledMethods.push('Binance Pay');
+  if (config.payment.binanceTransfer.enabled) enabledMethods.push('Binance Transfer');
 
   logger.info('PixVerifyBot is running!', {
     adminIds: config.admin.userIds,

@@ -1,5 +1,20 @@
 const { getDb } = require('../database');
 
+function buildStatusUpdate({ paymentStatus, paymentReference }) {
+  const fields = ['payment_status = ?'];
+  const values = [paymentStatus];
+
+  if (paymentReference !== undefined) {
+    fields.push('payment_reference = ?');
+    values.push(paymentReference);
+  }
+  if (['completed', 'failed', 'expired', 'rejected'].includes(paymentStatus)) {
+    fields.push("completed_at = datetime('now')");
+  }
+
+  return { fields, values };
+}
+
 const Purchase = {
   create({ telegramUserId, amount, creditsAdded, paymentProvider = null, paymentMethod = null, uniqueAmount = null, checkoutUrl = null, paymentReference = null }) {
     const result = getDb().prepare(
@@ -10,20 +25,18 @@ const Purchase = {
   },
 
   updateStatus(id, { paymentStatus, paymentReference }) {
-    const fields = ['payment_status = ?'];
-    const values = [paymentStatus];
-
-    if (paymentReference !== undefined) {
-      fields.push('payment_reference = ?');
-      values.push(paymentReference);
-    }
-    if (paymentStatus === 'completed' || paymentStatus === 'failed' || paymentStatus === 'expired') {
-      fields.push("completed_at = datetime('now')");
-    }
-
+    const { fields, values } = buildStatusUpdate({ paymentStatus, paymentReference });
     values.push(id);
     return getDb().prepare(
       `UPDATE purchases SET ${fields.join(', ')} WHERE id = ?`
+    ).run(...values);
+  },
+
+  updateStatusIfPending(id, { paymentStatus, paymentReference }) {
+    const { fields, values } = buildStatusUpdate({ paymentStatus, paymentReference });
+    values.push(id);
+    return getDb().prepare(
+      `UPDATE purchases SET ${fields.join(', ')} WHERE id = ? AND payment_status = 'pending'`
     ).run(...values);
   },
 
