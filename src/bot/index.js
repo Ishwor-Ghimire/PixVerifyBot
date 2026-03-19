@@ -21,6 +21,40 @@ const adminHandler = require('./handlers/admin');
 function createBot() {
   const bot = new TelegramBot(config.bot.token, { polling: true });
 
+  const subscriptionKeyboard = {
+    inline_keyboard: [
+      [{ text: '🌐 Join Community', url: config.links.community }],
+      [{ text: '✅ I have joined. Check now', callback_data: 'check_sub' }],
+    ],
+  };
+
+  const subscriptionBlockMessage = [
+    '⚠️ *Access Denied*',
+    '',
+    'You must join our official community before using this bot.',
+    '',
+    `👉 [Join our Channel](${config.links.community})`,
+  ].join('\n');
+
+  async function promptChannelJoin(update, alertText) {
+    const msg = update.message || update.callback_query?.message;
+    if (!msg?.chat?.id) return;
+
+    if (update.callback_query) {
+      await bot.answerCallbackQuery(update.callback_query.id, {
+        text: alertText,
+        show_alert: true,
+      });
+      return;
+    }
+
+    await bot.sendMessage(msg.chat.id, subscriptionBlockMessage, {
+      parse_mode: 'Markdown',
+      disable_web_page_preview: true,
+      reply_markup: subscriptionKeyboard,
+    });
+  }
+
   // Intercept all updates to enforce mandatory channel subscription
   const originalProcessUpdate = bot.processUpdate.bind(bot);
   bot.processUpdate = async (update) => {
@@ -34,29 +68,25 @@ function createBot() {
         if (!config.admin.userIds.includes(Number(userId))) {
           try {
             const member = await bot.getChatMember(config.bot.requiredChannel, userId);
-            if (member.status === 'left' || member.status === 'kicked') {
-              const blockMsg = `⚠️ *Access Denied*\n\nYou must join our official community before using this bot.\n\n👉 **[Join our Channel](${config.links.community})**`;
-              const keyboard = {
-                inline_keyboard: [
-                  [{ text: '🌐 Join Community', url: config.links.community }],
-                  [{ text: '✅ I have joined. Check now', callback_data: 'check_sub' }]
-                ]
-              };
-              
-              if (update.callback_query) {
-                if (update.callback_query.data === 'check_sub') {
-                  await bot.answerCallbackQuery(update.callback_query.id, { text: '❌ You haven\'t joined the channel yet!', show_alert: true });
-                } else {
-                  await bot.answerCallbackQuery(update.callback_query.id, { text: 'You must join the channel first!', show_alert: true });
-                }
-              } else {
-                await bot.sendMessage(chatId, blockMsg, { parse_mode: 'Markdown', disable_web_page_preview: true, reply_markup: keyboard });
-              }
+            if (!['member', 'administrator', 'creator', 'restricted'].includes(member.status)) {
+              await promptChannelJoin(
+                update,
+                update.callback_query?.data === 'check_sub'
+                  ? 'You have not joined the channel yet.'
+                  : 'You must join the channel first.'
+              );
               return; // Stop processing this update completely
             }
           } catch (err) {
-            logger.warn('Channel check failed (ensure bot is admin in channel)', { error: err.message, channel: config.bot.requiredChannel });
-            // Fail open if the bot doesn't have privileges or channel doesn't exist
+            logger.warn('Channel check failed; blocking access', {
+              error: err.message,
+              channel: config.bot.requiredChannel,
+            });
+            await promptChannelJoin(
+              update,
+              'Membership check is unavailable right now. Ask admin to verify the channel setup.'
+            );
+            return;
           }
         }
       }

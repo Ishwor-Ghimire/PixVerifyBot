@@ -30,15 +30,41 @@ function parseJSON(key, fallback) {
   }
 }
 
+function normalizeTelegramChatRef(value) {
+  const val = (value || '').trim();
+  if (!val) return '';
+
+  if (val.startsWith('-100')) return val;
+  if (val.startsWith('@')) return val;
+  if (/^[A-Za-z0-9_]{5,}$/.test(val)) return `@${val}`;
+
+  try {
+    const url = new URL(val.startsWith('http') ? val : `https://${val}`);
+    if (!['t.me', 'telegram.me', 'www.t.me', 'www.telegram.me'].includes(url.hostname)) {
+      return '';
+    }
+
+    const slug = url.pathname.replace(/^\/+/, '').split('/')[0];
+    if (!slug || slug.startsWith('+')) return '';
+    if (/^[A-Za-z0-9_]{5,}$/.test(slug)) return `@${slug}`;
+  } catch {
+    return '';
+  }
+
+  return '';
+}
+
 const CREDIT_PRICE = parseFloat(optional('CREDIT_PRICE_USD', '2.5'));
 const BINANCE_PAY_ID = optional('BINANCE_PAY_ID', '').trim();
 const BINANCE_API_KEY = optional('BINANCE_API_KEY', '').trim();
 const BINANCE_API_SECRET = optional('BINANCE_API_SECRET', '').trim();
+const COMMUNITY_LINK = optional('COMMUNITY_LINK', 'https://t.me/your_community').trim();
+const REQUIRED_CHANNEL = normalizeTelegramChatRef(optional('REQUIRED_CHANNEL', '') || COMMUNITY_LINK);
 
 const config = Object.freeze({
   bot: {
     token: required('TELEGRAM_BOT_TOKEN'),
-    requiredChannel: optional('REQUIRED_CHANNEL', ''),
+    requiredChannel: REQUIRED_CHANNEL,
   },
 
   api: {
@@ -57,7 +83,7 @@ const config = Object.freeze({
   },
 
   links: {
-    community: optional('COMMUNITY_LINK', 'https://t.me/your_community'),
+    community: COMMUNITY_LINK,
     support: optional('SUPPORT_CONTACT', '@your_support'),
   },
 
