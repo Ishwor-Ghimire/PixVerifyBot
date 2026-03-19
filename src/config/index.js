@@ -38,6 +38,7 @@ const BINANCE_API_SECRET = optional('BINANCE_API_SECRET', '').trim();
 const config = Object.freeze({
   bot: {
     token: required('TELEGRAM_BOT_TOKEN'),
+    requiredChannel: optional('REQUIRED_CHANNEL', ''),
   },
 
   api: {

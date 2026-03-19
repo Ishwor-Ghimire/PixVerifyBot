@@ -21,6 +21,43 @@ const adminHandler = require('./handlers/admin');
 function createBot() {
   const bot = new TelegramBot(config.bot.token, { polling: true });
 
+  // Intercept all updates to enforce mandatory channel subscription
+  const originalProcessUpdate = bot.processUpdate.bind(bot);
+  bot.processUpdate = async (update) => {
+    try {
+      const msg = update.message || update.callback_query?.message;
+      const userId = update.message?.from?.id || update.callback_query?.from?.id;
+      const chatId = msg?.chat?.id;
+
+      if (userId && chatId && config.bot.requiredChannel) {
+        // Skip channel check for bot admins
+        if (!config.admin.userIds.includes(userId)) {
+          try {
+            const member = await bot.getChatMember(config.bot.requiredChannel, userId);
+            if (member.status === 'left' || member.status === 'kicked') {
+              const blockMsg = `⚠️ *Access Denied*\n\nYou must join our official channel to use this bot.\n\n👉 **[Join our Channel](${config.links.community})**\n\nAfter joining, try your command again.`;
+              
+              if (update.callback_query) {
+                await bot.answerCallbackQuery(update.callback_query.id, { text: 'You must join the channel first!', show_alert: true });
+              } else {
+                await bot.sendMessage(chatId, blockMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
+              }
+              return; // Stop processing this update completely
+            }
+          } catch (err) {
+            logger.warn('Channel check failed (ensure bot is admin in channel)', { error: err.message, channel: config.bot.requiredChannel });
+            // Fail open if the bot doesn't have privileges or channel doesn't exist
+          }
+        }
+      }
+    } catch (e) {
+      logger.error('Error in processUpdate interceptor', { error: e.message });
+    }
+
+    return originalProcessUpdate(update);
+  };
+
+
   // Global error handlers
   bot.on('polling_error', (err) => {
     logger.error('Polling error', { error: err.message });

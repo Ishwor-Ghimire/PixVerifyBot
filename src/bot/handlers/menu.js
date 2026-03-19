@@ -6,7 +6,7 @@ function register(bot) {
       reply_markup: {
         inline_keyboard: [
           [
-            { text: '🚀 Generate Link', callback_data: `${CALLBACKS.MENU_ACTION}run` },
+            { text: '🚀 Start Verification', callback_data: `${CALLBACKS.MENU_ACTION}run` },
             { text: '💰 Balance', callback_data: `${CALLBACKS.MENU_ACTION}balance` },
           ],
           [
