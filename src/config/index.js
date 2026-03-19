@@ -84,6 +84,11 @@ const config = Object.freeze({
       enabled: !!process.env.USDT_BEP20_WALLET_ADDRESS,
     },
 
+    usdtTrc20: {
+      walletAddress: optional('USDT_TRC20_WALLET_ADDRESS', ''),
+      enabled: !!process.env.USDT_TRC20_WALLET_ADDRESS,
+    },
+
     binanceTransfer: {
       payId: BINANCE_PAY_ID,
       apiKey: BINANCE_API_KEY,

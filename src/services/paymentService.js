@@ -40,6 +40,40 @@ const PaymentService = {
   },
 
   /**
+   * Create a USDT TRC-20 payment order (auto-detected via blockchain).
+   */
+  createUsdtTrc20Order(telegramUserId, pkg) {
+    const baseAmount = parseFloat(pkg.price);
+
+    // TRC20 uses the same unique amount logic
+    const UsdtTrc20Service = require('./payments/usdtTrc20');
+    let uniqueAmount;
+    let attempts = 0;
+    do {
+      uniqueAmount = UsdtTrc20Service.generateUniqueAmount(baseAmount);
+      attempts++;
+    } while (Purchase.isUniqueAmountTaken(uniqueAmount) && attempts < 20);
+
+    const orderId = Purchase.create({
+      telegramUserId,
+      amount: pkg.price,
+      creditsAdded: pkg.credits,
+      paymentProvider: 'usdt_trc20',
+      paymentMethod: 'USDT (TRC-20)',
+      uniqueAmount,
+    });
+
+    logger.info('USDT TRC-20 order created', { orderId, uniqueAmount, telegramUserId });
+
+    return {
+      orderId,
+      method: 'usdt_trc20',
+      uniqueAmount,
+      walletAddress: config.payment.usdtTrc20.walletAddress,
+    };
+  },
+
+  /**
    * Create a Binance Transfer order.
    */
   createBinanceTransferOrder(telegramUserId, pkg) {
@@ -170,6 +204,9 @@ const PaymentService = {
     const methods = [];
     if (config.payment.usdt.enabled) {
       methods.push({ id: 'usdt_bep20', label: '💎 USDT (BEP-20)' });
+    }
+    if (config.payment.usdtTrc20.enabled) {
+      methods.push({ id: 'usdt_trc20', label: '🟥 USDT (TRC-20)' });
     }
     if (config.payment.binanceTransfer.enabled) {
       methods.push({ id: 'binance_transfer', label: '🟡 Binance Transfer' });

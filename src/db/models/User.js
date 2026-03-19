@@ -69,6 +69,20 @@ const User = {
     ).get(telegramUserId);
     return (user && user.is_admin === 1) || config.admin.userIds.includes(telegramUserId);
   },
+
+  getStats() {
+    const row = getDb().prepare(`
+      SELECT 
+        COUNT(*) as total_users,
+        SUM(credit_balance) as outstanding_credits
+      FROM users
+    `).get();
+    
+    return {
+      totalUsers: row.total_users || 0,
+      outstandingCredits: row.outstanding_credits || 0,
+    };
+  },
 };
 
 module.exports = User;

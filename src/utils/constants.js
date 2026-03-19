@@ -85,6 +85,12 @@ const CALLBACKS = {
   ADMIN_CONFIRM: 'adm_cfm_',
   ADMIN_REJECT: 'adm_rej_',
   BINANCE_PAID: 'bnc_paid_',
+
+  // Admin Panel Callbacks
+  ADMIN_MENU: 'adm_menu',
+  ADMIN_STATS: 'adm_stats',
+  ADMIN_USER_SEARCH: 'adm_usr_search',
+  ADMIN_SETTINGS: 'adm_settings',
 };
 
 module.exports = { MESSAGES, STATUS_LABELS, CALLBACKS };

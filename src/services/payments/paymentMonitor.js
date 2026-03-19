@@ -1,5 +1,6 @@
 const Purchase = require('../../db/models/Purchase');
 const UsdtBep20Service = require('./usdtBep20');
+const UsdtTrc20Service = require('./usdtTrc20');
 const PaymentService = require('../paymentService');
 const logger = require('../../utils/logger');
 
@@ -48,6 +49,8 @@ const PaymentMonitor = {
           // Binance Transfer orders are confirmed manually by admin
           if (purchase.payment_provider === 'usdt_bep20') {
             await this.checkUsdtPayment(purchase);
+          } else if (purchase.payment_provider === 'usdt_trc20') {
+            await this.checkUsdtTrc20Payment(purchase);
           }
         } catch (err) {
           logger.error('Payment check error', {
@@ -76,6 +79,25 @@ const PaymentMonitor = {
     if (!confirmed) return;
 
     logger.info('USDT BEP-20 payment detected', {
+      purchaseId: purchase.id,
+      txHash: tx.hash,
+      amount: tx.amount,
+    });
+  },
+
+  async checkUsdtTrc20Payment(purchase) {
+    const expectedAmount = parseFloat(purchase.unique_amount);
+    if (!expectedAmount) return;
+
+    const orderTimestamp = Math.floor(new Date(purchase.created_at).getTime() / 1000) - 60;
+
+    const tx = await UsdtTrc20Service.findMatchingTransfer(expectedAmount, orderTimestamp);
+    if (!tx) return;
+
+    const confirmed = await this.confirmPurchase(purchase, tx.hash);
+    if (!confirmed) return;
+
+    logger.info('USDT TRC-20 payment detected', {
       purchaseId: purchase.id,
       txHash: tx.hash,
       amount: tx.amount,

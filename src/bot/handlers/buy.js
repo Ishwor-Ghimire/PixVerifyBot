@@ -94,6 +94,8 @@ function register(bot) {
 
     if (methodId === 'usdt_bep20') {
       await handleUsdtPayment(bot, chatId, userId, pkg);
+    } else if (methodId === 'usdt_trc20') {
+      await handleUsdtTrc20Payment(bot, chatId, userId, pkg);
     } else if (methodId === 'binance_transfer') {
       await handleBinanceTransfer(bot, chatId, userId, pkg);
     }
@@ -119,9 +121,9 @@ function register(bot) {
       '',
       `📋 Order #${orderId}`,
       '',
-      'Please send your *Binance Pay Order ID* now.',
+      'Please send your *Binance Pay Order (Transaction) ID* now.',
       '',
-      '_You can find it in: Binance App → Pay → Transaction History → tap the transaction → Order ID_',
+      '_You can find it in: Binance App → Pay → Transaction History → tap the transaction → copy the Order ID (also called Transaction ID)_',
     ].join('\n'), { parse_mode: 'Markdown' });
   });
 
@@ -224,6 +226,34 @@ async function handleUsdtPayment(bot, chatId, userId, pkg) {
     '⚠️ *Important:*',
     '• Send the *exact amount* shown above',
     '• Use only the *BSC (BEP-20)* network',
+    '• Your credits will be added *automatically* once the transaction is confirmed',
+    '',
+    '⏱️ This order expires in 60 minutes.',
+  ].join('\n');
+
+  await bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
+}
+
+/**
+ * Handle USDT TRC-20 payment flow (auto-detected via blockchain)
+ */
+async function handleUsdtTrc20Payment(bot, chatId, userId, pkg) {
+  const order = PaymentService.createUsdtTrc20Order(userId, pkg);
+
+  const msg = [
+    '🟥 *USDT (TRC-20) Payment*',
+    '',
+    `📋 Order #${order.orderId}`,
+    `📦 Package: *${pkg.label}*`,
+    '',
+    `💰 Send exactly: *\`${order.uniqueAmount.toFixed(3)}\` USDT*`,
+    '',
+    '📬 *To this address (TRC-20 / Tron network):*',
+    `\`${order.walletAddress}\``,
+    '',
+    '⚠️ *Important:*',
+    '• Send the *exact amount* shown above',
+    '• Use only the *TRON (TRC-20)* network',
     '• Your credits will be added *automatically* once the transaction is confirmed',
     '',
     '⏱️ This order expires in 60 minutes.',

@@ -12,11 +12,11 @@ const USDT_CONTRACT = '0x55d398326f99059fF775485246999027B3197955'; // USDT on B
 const UsdtBep20Service = {
   /**
    * Generate a unique payment amount by adding random small decimals.
-   * e.g. base $12.50 → $12.5017 or $12.5083
+   * e.g. base $12.50 → $12.515 (max 3 decimals for exchange compat)
    */
   generateUniqueAmount(baseAmount) {
-    const suffix = Math.floor(Math.random() * 9000 + 1000); // 1000–9999
-    return parseFloat((baseAmount + suffix / 1000000).toFixed(6));
+    const suffix = Math.floor(Math.random() * 90 + 10); // 10–99
+    return parseFloat((baseAmount + suffix / 1000).toFixed(3));
   },
 
   /**
@@ -70,7 +70,7 @@ const UsdtBep20Service = {
    */
   async findMatchingTransfer(expectedAmount, afterTimestamp) {
     const transfers = await this.getRecentTransfers();
-    const tolerance = 0.0001; // 0.01 cent tolerance
+    const tolerance = 0.001; // 0.1 cent tolerance for 3-decimal precision
 
     for (const tx of transfers) {
       if (tx.timestamp < afterTimestamp) continue;

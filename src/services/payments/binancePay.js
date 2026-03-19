@@ -67,6 +67,20 @@ const BinanceApiClient = {
         limit: 100,
       });
 
+      // Log raw response to diagnose response shape issues
+      logger.info('Binance Pay API raw response', {
+        dataType: typeof data,
+        isArray: Array.isArray(data),
+        topLevelKeys: data ? Object.keys(data) : [],
+        status: data?.status,
+        code: data?.code,
+        dataLength: Array.isArray(data) ? data.length
+          : Array.isArray(data?.data) ? data.data.length
+          : Array.isArray(data?.rows) ? data.rows.length
+          : Array.isArray(data?.result) ? data.result.length
+          : 'unknown',
+      });
+
       const transactions = Array.isArray(data)
         ? data
         : Array.isArray(data?.data)
@@ -78,13 +92,15 @@ const BinanceApiClient = {
               : null;
 
       if (!transactions) {
-        logger.warn('Unexpected Pay transactions response', { data });
+        logger.warn('Unexpected Pay transactions response shape', { data });
         return [];
       }
 
+      logger.info('Binance Pay transactions fetched', { count: transactions.length });
       return transactions;
     } catch (err) {
       logger.error('Failed to fetch Pay transactions', {
+        status: err.response?.status,
         error: err.response?.data || err.message,
       });
       return [];
@@ -102,24 +118,41 @@ const BinanceApiClient = {
       const transactions = await this.getPayTransactions(120);
 
       if (transactions.length === 0) {
-        return { verified: false, reason: 'No recent transactions found. Try again in a moment.' };
+        return {
+          verified: false,
+          reason: 'No recent Binance Pay transactions found in the last 2 hours.\n\n💡 Possible causes:\n• API key is missing "Pay Transaction History" read permission\n• Transaction not yet settled on Binance\n• Contact /support if this persists',
+        };
       }
 
-      // Search for matching transaction
+      // Log the first transaction's keys so we can see the actual field names Binance uses
+      if (transactions[0]) {
+        logger.info('Sample Binance Pay transaction fields', {
+          keys: Object.keys(transactions[0]),
+          sample: transactions[0],
+        });
+      }
+
+      // Search for matching transaction — try ALL known Binance Pay field names
       for (const tx of transactions) {
-        const txOrderId = String(tx.orderNumber || tx.transactionId || tx.orderId || '').trim();
+        const txOrderId = String(
+          tx.orderNumber ||
+          tx.transactionId ||
+          tx.orderId ||
+          tx.bizId ||
+          tx.merchantTradeNo ||
+          tx.prepayId ||
+          tx.tradeId ||
+          ''
+        ).trim();
 
-        // Match by order ID (user provides this from their Binance receipt)
         if (txOrderId === requestedOrderId) {
-          const receivedAmount = parseFloat(tx.amount);
-          const currency = tx.currency || 'USDT';
+          const receivedAmount = parseFloat(tx.amount || tx.totalAmount || '0');
+          const currency = tx.currency || tx.orderCurrency || 'USDT';
 
-          // Verify it's a received payment (positive amount)
           if (receivedAmount <= 0) {
             return { verified: false, reason: 'Transaction found but it is an outgoing payment, not incoming.' };
           }
 
-          // Verify amount matches (within small tolerance)
           if (Math.abs(receivedAmount - expectedAmount) > 0.01) {
             return {
               verified: false,
@@ -133,13 +166,16 @@ const BinanceApiClient = {
               orderId: txOrderId,
               amount: receivedAmount,
               currency,
-              time: tx.transactionTime,
+              time: tx.transactionTime || tx.createTime,
             },
           };
         }
       }
 
-      return { verified: false, reason: 'Transaction not found. Please check the Order ID and try again.' };
+      return {
+        verified: false,
+        reason: 'Transaction ID not found in your recent Binance Pay history. Please double-check the ID and try again.',
+      };
     } catch (err) {
       logger.error('Payment verification error', { error: err.message });
       return { verified: false, reason: 'Verification service error. Please try again or contact support.' };

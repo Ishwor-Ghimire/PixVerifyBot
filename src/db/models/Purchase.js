@@ -69,6 +69,23 @@ const Purchase = {
   getById(id) {
     return getDb().prepare('SELECT * FROM purchases WHERE id = ?').get(id);
   },
+
+  getStats() {
+    const row = getDb().prepare(`
+      SELECT 
+        COUNT(*) as total_orders,
+        SUM(amount) as total_revenue,
+        SUM(credits_added) as total_credits_sold
+      FROM purchases 
+      WHERE payment_status = 'completed'
+    `).get();
+    
+    return {
+      totalOrders: row.total_orders || 0,
+      totalRevenue: row.total_revenue || 0,
+      totalCreditsSold: row.total_credits_sold || 0,
+    };
+  },
 };
 
 module.exports = Purchase;
