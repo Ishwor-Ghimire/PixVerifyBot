@@ -1,7 +1,6 @@
 const Purchase = require('../../db/models/Purchase');
 const CreditService = require('../creditService');
 const UsdtBep20Service = require('./usdtBep20');
-const BinancePayService = require('./binancePay');
 const logger = require('../../utils/logger');
 
 let monitorInterval = null;
@@ -9,12 +8,10 @@ let botInstance = null;
 
 /**
  * Background payment monitor.
- * Polls for completed payments across all providers and auto-confirms.
+ * Polls for completed USDT BEP-20 payments and auto-confirms.
+ * Binance Transfer orders are confirmed manually by admin via /confirm.
  */
 const PaymentMonitor = {
-  /**
-   * Start the background monitoring loop
-   */
   start(bot, intervalMs = 15000) {
     botInstance = bot;
     if (monitorInterval) return;
@@ -34,9 +31,6 @@ const PaymentMonitor = {
     }
   },
 
-  /**
-   * Check all pending purchases for payment completion
-   */
   async checkPendingPayments() {
     try {
       const pending = Purchase.getPending();
@@ -44,15 +38,14 @@ const PaymentMonitor = {
 
       for (const purchase of pending) {
         try {
+          // Only auto-check USDT BEP-20 payments
+          // Binance Transfer orders are confirmed manually by admin
           if (purchase.payment_provider === 'usdt_bep20') {
             await this.checkUsdtPayment(purchase);
-          } else if (purchase.payment_provider === 'binance_pay') {
-            await this.checkBinancePayment(purchase);
           }
         } catch (err) {
           logger.error('Payment check error', {
             purchaseId: purchase.id,
-            provider: purchase.payment_provider,
             error: err.message,
           });
         }
@@ -62,20 +55,15 @@ const PaymentMonitor = {
     }
   },
 
-  /**
-   * Check USDT BEP-20 payment by looking for matching transfer
-   */
   async checkUsdtPayment(purchase) {
     const expectedAmount = parseFloat(purchase.unique_amount);
     if (!expectedAmount) return;
 
-    // Only look for transfers after the order was created
     const orderTimestamp = Math.floor(new Date(purchase.created_at).getTime() / 1000) - 60;
 
     const tx = await UsdtBep20Service.findMatchingTransfer(expectedAmount, orderTimestamp);
     if (!tx) return;
 
-    // Payment found — confirm it
     await this.confirmPurchase(purchase, tx.hash);
     logger.info('USDT BEP-20 payment detected', {
       purchaseId: purchase.id,
@@ -84,32 +72,6 @@ const PaymentMonitor = {
     });
   },
 
-  /**
-   * Check Binance Pay order status
-   */
-  async checkBinancePayment(purchase) {
-    const tradeNo = purchase.payment_reference;
-    if (!tradeNo) return;
-
-    const result = await BinancePayService.queryOrder(tradeNo);
-
-    if (result.status === 'PAID') {
-      await this.confirmPurchase(purchase, result.transactionId || tradeNo);
-      logger.info('Binance Pay payment confirmed', {
-        purchaseId: purchase.id,
-        transactionId: result.transactionId,
-      });
-    } else if (result.status === 'CANCELED' || result.status === 'EXPIRED') {
-      Purchase.updateStatus(purchase.id, {
-        paymentStatus: 'expired',
-      });
-      logger.info('Binance Pay order expired/cancelled', { purchaseId: purchase.id });
-    }
-  },
-
-  /**
-   * Confirm purchase: update status, add credits, notify user
-   */
   async confirmPurchase(purchase, reference) {
     Purchase.updateStatus(purchase.id, {
       paymentStatus: 'completed',
@@ -118,7 +80,6 @@ const PaymentMonitor = {
 
     CreditService.addCredits(purchase.telegram_user_id, purchase.credits_added);
 
-    // Notify user via Telegram
     if (botInstance) {
       try {
         const msg = [

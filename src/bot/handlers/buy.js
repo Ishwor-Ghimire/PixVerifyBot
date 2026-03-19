@@ -92,8 +92,8 @@ function register(bot) {
 
     if (methodId === 'usdt_bep20') {
       await handleUsdtPayment(bot, chatId, userId, pkg);
-    } else if (methodId === 'binance_pay') {
-      await handleBinancePayment(bot, chatId, userId, pkg);
+    } else if (methodId === 'binance_transfer') {
+      await handleBinanceTransfer(bot, chatId, userId, pkg);
     }
   });
 
@@ -111,7 +111,7 @@ function register(bot) {
 }
 
 /**
- * Handle USDT BEP-20 payment flow
+ * Handle USDT BEP-20 payment flow (auto-detected)
  */
 async function handleUsdtPayment(bot, chatId, userId, pkg) {
   const order = PaymentService.createUsdtOrder(userId, pkg);
@@ -139,48 +139,33 @@ async function handleUsdtPayment(bot, chatId, userId, pkg) {
 }
 
 /**
- * Handle Binance Pay payment flow
+ * Handle Binance Transfer (Pay ID) flow — admin confirms manually
  */
-async function handleBinancePayment(bot, chatId, userId, pkg) {
-  const waitMsg = await bot.sendMessage(chatId, '🔄 Creating Binance Pay order...');
+async function handleBinanceTransfer(bot, chatId, userId, pkg) {
+  const order = PaymentService.createBinanceTransferOrder(userId, pkg);
 
-  try {
-    const order = await PaymentService.createBinancePayOrder(userId, pkg);
+  const msg = [
+    '🟡 *Binance Transfer Payment*',
+    '',
+    `📋 Order #${order.orderId}`,
+    `📦 Package: *${pkg.label}*`,
+    `💰 Amount: *$${pkg.price} USDT*`,
+    '',
+    '📬 *Send USDT to this Binance Pay ID:*',
+    `\`${order.binancePayId}\``,
+    '',
+    '⚠️ *Important:*',
+    '• Open *Binance App* → *Pay* → *Send* → Enter Pay ID above',
+    '• Send exactly *$' + pkg.price + ' USDT*',
+    `• Add this in the message/note: \`ORDER${order.orderId}\``,
+    '',
+    '✅ After sending, an admin will verify and confirm your payment.',
+    'You will be notified when credits are added.',
+    '',
+    'Need help? Use /support',
+  ].join('\n');
 
-    if (!order.orderId) {
-      return bot.editMessageText(
-        '⚠️ Failed to create payment order. Please try again or use USDT (BEP-20).',
-        { chat_id: chatId, message_id: waitMsg.message_id }
-      );
-    }
-
-    const msg = [
-      '🟡 *Binance Pay*',
-      '',
-      `📋 Order #${order.orderId}`,
-      `📦 Package: *${pkg.label}*`,
-      `💰 Amount: *$${pkg.price} USDT*`,
-      '',
-      '👇 Click the button below to pay:',
-    ].join('\n');
-
-    await bot.editMessageText(msg, {
-      chat_id: chatId,
-      message_id: waitMsg.message_id,
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [[
-          { text: '💳 Pay with Binance', url: order.checkoutUrl },
-        ]],
-      },
-    });
-  } catch (err) {
-    logger.error('Binance Pay order error', { error: err.message });
-    await bot.editMessageText(
-      '⚠️ Failed to create payment order. Please try again later.',
-      { chat_id: chatId, message_id: waitMsg.message_id }
-    );
-  }
+  await bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
 }
 
 module.exports = { register };

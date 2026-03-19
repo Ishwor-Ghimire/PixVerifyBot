@@ -81,10 +81,9 @@ const config = Object.freeze({
       enabled: !!process.env.USDT_BEP20_WALLET_ADDRESS,
     },
 
-    binancePay: {
-      apiKey: optional('BINANCE_PAY_API_KEY', ''),
-      secretKey: optional('BINANCE_PAY_SECRET_KEY', ''),
-      enabled: !!process.env.BINANCE_PAY_API_KEY,
+    binanceTransfer: {
+      payId: optional('BINANCE_PAY_ID', ''),
+      enabled: !!process.env.BINANCE_PAY_ID,
     },
   },
 

@@ -1,19 +1,16 @@
 const Purchase = require('../db/models/Purchase');
 const CreditService = require('./creditService');
 const UsdtBep20Service = require('./payments/usdtBep20');
-const BinancePayService = require('./payments/binancePay');
 const config = require('../config');
 const logger = require('../utils/logger');
 
 const PaymentService = {
   /**
-   * Create a USDT BEP-20 payment order.
-   * Generates a unique payment amount for on-chain matching.
+   * Create a USDT BEP-20 payment order (auto-detected via blockchain).
    */
   createUsdtOrder(telegramUserId, pkg) {
     const baseAmount = parseFloat(pkg.price);
 
-    // Generate unique amount and ensure it's not already in use
     let uniqueAmount;
     let attempts = 0;
     do {
@@ -41,45 +38,29 @@ const PaymentService = {
   },
 
   /**
-   * Create a Binance Pay order.
-   * Returns checkout URL for the user.
+   * Create a Binance Transfer order (admin confirms manually).
+   * User sends USDT to admin's Binance Pay ID.
    */
-  async createBinancePayOrder(telegramUserId, pkg) {
-    const amount = parseFloat(pkg.price);
-    const merchantTradeNo = `PVB_${telegramUserId}_${Date.now()}`;
-
-    const bpOrder = await BinancePayService.createOrder({
-      merchantTradeNo,
-      amount,
-      description: `PixVerifyBot - ${pkg.label}`,
-    });
-
-    if (!bpOrder) {
-      return { orderId: null, error: 'Failed to create Binance Pay order' };
-    }
-
+  createBinanceTransferOrder(telegramUserId, pkg) {
     const orderId = Purchase.create({
       telegramUserId,
       amount: pkg.price,
       creditsAdded: pkg.credits,
-      paymentProvider: 'binance_pay',
-      paymentMethod: 'Binance Pay',
-      paymentReference: merchantTradeNo, // Used for status polling
-      checkoutUrl: bpOrder.checkoutUrl,
+      paymentProvider: 'binance_transfer',
+      paymentMethod: 'Binance Transfer',
     });
 
-    logger.info('Binance Pay order created', { orderId, merchantTradeNo, telegramUserId });
+    logger.info('Binance Transfer order created', { orderId, telegramUserId });
 
     return {
       orderId,
-      method: 'binance_pay',
-      checkoutUrl: bpOrder.checkoutUrl,
-      merchantTradeNo,
+      method: 'binance_transfer',
+      binancePayId: config.payment.binanceTransfer.payId,
     };
   },
 
   /**
-   * Manually confirm payment and add credits.
+   * Confirm payment and add credits (used by admin /confirm).
    */
   confirmPayment(orderId, paymentReference = null) {
     const purchase = Purchase.getById(orderId);
@@ -101,9 +82,6 @@ const PaymentService = {
     return { success: true, credits: purchase.credits_added };
   },
 
-  /**
-   * Get purchase history for user
-   */
   getHistory(telegramUserId) {
     return Purchase.getByUser(telegramUserId);
   },
@@ -116,8 +94,8 @@ const PaymentService = {
     if (config.payment.usdt.enabled) {
       methods.push({ id: 'usdt_bep20', label: '💎 USDT (BEP-20)' });
     }
-    if (config.payment.binancePay.enabled) {
-      methods.push({ id: 'binance_pay', label: '🟡 Binance Pay' });
+    if (config.payment.binanceTransfer.enabled) {
+      methods.push({ id: 'binance_transfer', label: '🟡 Binance Transfer' });
     }
     return methods;
   },
