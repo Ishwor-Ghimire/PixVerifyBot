@@ -1,4 +1,4 @@
-const { MESSAGES } = require('../../utils/constants');
+const { MESSAGES, CALLBACKS } = require('../../utils/constants');
 
 function register(bot) {
   bot.onText(/\/start/, async (msg) => {
