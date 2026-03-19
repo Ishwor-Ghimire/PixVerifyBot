@@ -31,16 +31,26 @@ function createBot() {
 
       if (userId && chatId && config.bot.requiredChannel) {
         // Skip channel check for bot admins
-        if (!config.admin.userIds.includes(userId)) {
+        if (!config.admin.userIds.includes(Number(userId))) {
           try {
             const member = await bot.getChatMember(config.bot.requiredChannel, userId);
             if (member.status === 'left' || member.status === 'kicked') {
-              const blockMsg = `⚠️ *Access Denied*\n\nYou must join our official channel to use this bot.\n\n👉 **[Join our Channel](${config.links.community})**\n\nAfter joining, try your command again.`;
+              const blockMsg = `⚠️ *Access Denied*\n\nYou must join our official community before using this bot.\n\n👉 **[Join our Channel](${config.links.community})**`;
+              const keyboard = {
+                inline_keyboard: [
+                  [{ text: '🌐 Join Community', url: config.links.community }],
+                  [{ text: '✅ I have joined. Check now', callback_data: 'check_sub' }]
+                ]
+              };
               
               if (update.callback_query) {
-                await bot.answerCallbackQuery(update.callback_query.id, { text: 'You must join the channel first!', show_alert: true });
+                if (update.callback_query.data === 'check_sub') {
+                  await bot.answerCallbackQuery(update.callback_query.id, { text: '❌ You haven\'t joined the channel yet!', show_alert: true });
+                } else {
+                  await bot.answerCallbackQuery(update.callback_query.id, { text: 'You must join the channel first!', show_alert: true });
+                }
               } else {
-                await bot.sendMessage(chatId, blockMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
+                await bot.sendMessage(chatId, blockMsg, { parse_mode: 'Markdown', disable_web_page_preview: true, reply_markup: keyboard });
               }
               return; // Stop processing this update completely
             }
@@ -94,6 +104,15 @@ function createBot() {
 
   // Handle menu callback routing
   bot.on('callback_query', async (query) => {
+    if (query.data === 'check_sub') {
+      await bot.answerCallbackQuery(query.id, { text: '✅ Verified! Welcome.' });
+      try { await bot.deleteMessage(query.message.chat.id, query.message.message_id); } catch {}
+      
+      const fakeMsg = { chat: query.message.chat, from: query.from, message_id: query.message.message_id, text: '/start' };
+      bot.processUpdate({ message: { ...fakeMsg, text: '/start', date: Date.now() } });
+      return;
+    }
+
     if (!query.data?.startsWith(CALLBACKS.MENU_ACTION)) return;
 
     const action = query.data.replace(CALLBACKS.MENU_ACTION, '');
@@ -110,7 +129,6 @@ function createBot() {
     switch (action) {
       case 'run':
         bot.emit('text', fakeMsg, [fakeMsg.text]); // Triggers /run regex
-        // Re-emit as message with /run text for onText to pick up
         bot.processUpdate({ message: { ...fakeMsg, text: '/run', date: Date.now() } });
         break;
       case 'balance':
