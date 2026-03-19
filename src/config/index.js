@@ -83,6 +83,8 @@ const config = Object.freeze({
 
     binanceTransfer: {
       payId: optional('BINANCE_PAY_ID', ''),
+      apiKey: optional('BINANCE_API_KEY', ''),
+      apiSecret: optional('BINANCE_API_SECRET', ''),
       enabled: !!process.env.BINANCE_PAY_ID,
     },
   },

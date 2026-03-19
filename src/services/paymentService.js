@@ -1,6 +1,7 @@
 const Purchase = require('../db/models/Purchase');
 const CreditService = require('./creditService');
 const UsdtBep20Service = require('./payments/usdtBep20');
+const BinanceApiClient = require('./payments/binancePay');
 const config = require('../config');
 const logger = require('../utils/logger');
 
@@ -38,8 +39,7 @@ const PaymentService = {
   },
 
   /**
-   * Create a Binance Transfer order (admin confirms manually).
-   * User sends USDT to admin's Binance Pay ID.
+   * Create a Binance Transfer order.
    */
   createBinanceTransferOrder(telegramUserId, pkg) {
     const orderId = Purchase.create({
@@ -60,7 +60,49 @@ const PaymentService = {
   },
 
   /**
-   * Confirm payment and add credits (used by admin /confirm).
+   * Verify a Binance Transfer using the order ID from user's receipt.
+   * Queries Binance API to confirm the payment was received.
+   */
+  async verifyBinancePayment(purchaseId, binanceOrderId) {
+    const purchase = Purchase.getById(purchaseId);
+    if (!purchase) {
+      return { success: false, reason: 'Order not found.' };
+    }
+    if (purchase.payment_status === 'completed') {
+      return { success: false, reason: 'Order already confirmed.' };
+    }
+
+    const expectedAmount = parseFloat(purchase.amount);
+    const result = await BinanceApiClient.verifyPayment(binanceOrderId, expectedAmount);
+
+    if (!result.verified) {
+      logger.warn('Binance payment verification failed', {
+        purchaseId,
+        binanceOrderId,
+        reason: result.reason,
+      });
+      return { success: false, reason: result.reason };
+    }
+
+    // Payment verified — confirm and add credits
+    Purchase.updateStatus(purchaseId, {
+      paymentStatus: 'completed',
+      paymentReference: `binance_${binanceOrderId}`,
+    });
+
+    CreditService.addCredits(purchase.telegram_user_id, purchase.credits_added);
+
+    logger.info('Binance payment auto-verified', {
+      purchaseId,
+      binanceOrderId,
+      credits: purchase.credits_added,
+    });
+
+    return { success: true, credits: purchase.credits_added };
+  },
+
+  /**
+   * Confirm payment manually (used by admin /confirm).
    */
   confirmPayment(orderId, paymentReference = null) {
     const purchase = Purchase.getById(orderId);
@@ -86,9 +128,6 @@ const PaymentService = {
     return Purchase.getByUser(telegramUserId);
   },
 
-  /**
-   * Get available payment methods based on configuration
-   */
   getAvailableMethods() {
     const methods = [];
     if (config.payment.usdt.enabled) {

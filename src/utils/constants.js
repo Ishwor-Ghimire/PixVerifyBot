@@ -84,6 +84,7 @@ const CALLBACKS = {
   MENU_ACTION: 'menu_',
   ADMIN_CONFIRM: 'adm_cfm_',
   ADMIN_REJECT: 'adm_rej_',
+  BINANCE_PAID: 'bnc_paid_',
 };
 
 module.exports = { MESSAGES, STATUS_LABELS, CALLBACKS };

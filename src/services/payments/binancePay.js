@@ -3,122 +3,126 @@ const axios = require('axios');
 const config = require('../../config');
 const logger = require('../../utils/logger');
 
+const BASE_URL = 'https://api.binance.com';
+
 /**
- * Binance Pay merchant API integration.
- * Creates payment orders and polls for completion.
- *
- * Docs: https://developers.binance.com/docs/binance-pay/api-order-create-v2
+ * Binance Exchange API client for verifying Pay transactions.
+ * Uses HMAC-SHA256 signed requests with the user's API key.
  */
-const BinancePayService = {
+const BinanceApiClient = {
   /**
-   * Generate request signature for Binance Pay API
+   * Create HMAC-SHA256 signature for Binance API
    */
-  _generateSignature(timestamp, nonce, body) {
-    const payload = `${timestamp}\n${nonce}\n${body}\n`;
+  _sign(queryString) {
     return crypto
-      .createHmac('sha512', config.payment.binancePay.secretKey)
-      .update(payload)
-      .digest('hex')
-      .toUpperCase();
+      .createHmac('sha256', config.payment.binanceTransfer.apiSecret)
+      .update(queryString)
+      .digest('hex');
   },
 
   /**
-   * Make authenticated request to Binance Pay API
+   * Make signed GET request to Binance API
    */
-  async _request(endpoint, body = {}) {
-    const { apiKey } = config.payment.binancePay;
-    const timestamp = Date.now();
-    const nonce = crypto.randomBytes(16).toString('hex');
-    const bodyStr = JSON.stringify(body);
-    const signature = this._generateSignature(timestamp, nonce, bodyStr);
+  async _signedGet(endpoint, params = {}) {
+    const { apiKey } = config.payment.binanceTransfer;
+    params.timestamp = Date.now();
+    params.recvWindow = 10000;
 
-    try {
-      const { data } = await axios.post(
-        `https://bpay.binanceapi.com${endpoint}`,
-        body,
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'BinancePay-Timestamp': timestamp,
-            'BinancePay-Nonce': nonce,
-            'BinancePay-Certificate-SN': apiKey,
-            'BinancePay-Signature': signature,
-          },
-          timeout: 15000,
-        }
-      );
-      return data;
-    } catch (err) {
-      logger.error('Binance Pay API error', {
-        endpoint,
-        error: err.response?.data || err.message,
-      });
-      throw err;
-    }
-  },
+    const queryString = Object.entries(params)
+      .map(([k, v]) => `${k}=${v}`)
+      .join('&');
 
-  /**
-   * Create a Binance Pay order.
-   * Returns { prepayId, checkoutUrl, qrContent }
-   */
-  async createOrder({ merchantTradeNo, amount, description }) {
-    const body = {
-      env: { terminalType: 'WEB' },
-      merchantTradeNo,
-      orderAmount: amount.toFixed(2),
-      currency: 'USDT',
-      description: description || 'PixVerifyBot Credits',
-      goodsDetails: [{
-        goodsType: '02', // Virtual goods
-        goodsCategory: 'Z000', // Others
-        referenceGoodsId: merchantTradeNo,
-        goodsName: description || 'Credits',
-        goodsUnitAmount: { currency: 'USDT', amount: amount.toFixed(2) },
-      }],
-    };
+    const signature = this._sign(queryString);
+    const url = `${BASE_URL}${endpoint}?${queryString}&signature=${signature}`;
 
-    const res = await this._request('/binancepay/openapi/v3/order', body);
-
-    if (res.status !== 'SUCCESS') {
-      logger.error('Binance Pay order creation failed', { response: res });
-      return null;
-    }
-
-    logger.info('Binance Pay order created', {
-      merchantTradeNo,
-      prepayId: res.data.prepayId,
+    const { data } = await axios.get(url, {
+      headers: { 'X-MBX-APIKEY': apiKey },
+      timeout: 10000,
     });
 
-    return {
-      prepayId: res.data.prepayId,
-      checkoutUrl: res.data.universalUrl,
-      qrContent: res.data.qrcodeLink,
-    };
+    return data;
   },
 
   /**
-   * Query order status.
-   * Returns status: 'INITIAL' | 'PENDING' | 'PAID' | 'CANCELED' | 'ERROR' | 'EXPIRED'
+   * Get recent Pay transactions (both sent and received).
+   * Returns transactions from the last N minutes.
    */
-  async queryOrder(merchantTradeNo) {
+  async getPayTransactions(lookbackMinutes = 120) {
     try {
-      const res = await this._request('/binancepay/openapi/v3/order/query', {
-        merchantTradeNo,
+      const startTimestamp = Date.now() - (lookbackMinutes * 60 * 1000);
+
+      const data = await this._signedGet('/sapi/v1/pay/transactions', {
+        startTimestamp,
+        limit: 100,
       });
 
-      if (res.status !== 'SUCCESS') {
-        return { status: 'ERROR' };
+      if (!Array.isArray(data)) {
+        logger.warn('Unexpected Pay transactions response', { data });
+        return [];
       }
 
-      return {
-        status: res.data.status,
-        transactionId: res.data.transactionId || null,
-        paidAmount: res.data.totalPayAmount ? parseFloat(res.data.totalPayAmount) : 0,
-      };
-    } catch {
-      return { status: 'ERROR' };
+      return data;
+    } catch (err) {
+      logger.error('Failed to fetch Pay transactions', {
+        error: err.response?.data || err.message,
+      });
+      return [];
+    }
+  },
+
+  /**
+   * Verify a specific Pay transaction by order ID.
+   * Checks if a payment was received with the expected amount.
+   * Returns { verified, transaction } or { verified: false, reason }
+   */
+  async verifyPayment(orderIdFromUser, expectedAmount) {
+    try {
+      const transactions = await this.getPayTransactions(120);
+
+      if (transactions.length === 0) {
+        return { verified: false, reason: 'No recent transactions found. Try again in a moment.' };
+      }
+
+      // Search for matching transaction
+      for (const tx of transactions) {
+        const txOrderId = tx.orderNumber || tx.transactionId || '';
+
+        // Match by order ID (user provides this from their Binance receipt)
+        if (txOrderId === orderIdFromUser) {
+          const receivedAmount = parseFloat(tx.amount);
+          const currency = tx.currency || 'USDT';
+
+          // Verify it's a received payment (positive amount)
+          if (receivedAmount <= 0) {
+            return { verified: false, reason: 'Transaction found but it is an outgoing payment, not incoming.' };
+          }
+
+          // Verify amount matches (within small tolerance)
+          if (Math.abs(receivedAmount - expectedAmount) > 0.01) {
+            return {
+              verified: false,
+              reason: `Amount mismatch. Expected $${expectedAmount}, got $${receivedAmount} ${currency}.`,
+            };
+          }
+
+          return {
+            verified: true,
+            transaction: {
+              orderId: txOrderId,
+              amount: receivedAmount,
+              currency,
+              time: tx.transactionTime,
+            },
+          };
+        }
+      }
+
+      return { verified: false, reason: 'Transaction not found. Please check the Order ID and try again.' };
+    } catch (err) {
+      logger.error('Payment verification error', { error: err.message });
+      return { verified: false, reason: 'Verification service error. Please try again or contact support.' };
     }
   },
 };
 
-module.exports = BinancePayService;
+module.exports = BinanceApiClient;
