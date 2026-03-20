@@ -88,6 +88,13 @@ const PaymentMonitor = {
     });
 
     const orderTimestamp = Math.floor(new Date(purchase.created_at).getTime() / 1000) - 60;
+    if (!Number.isFinite(orderTimestamp)) {
+      logger.warn('BEP-20 order has invalid created_at timestamp', {
+        purchaseId: purchase.id,
+        createdAt: purchase.created_at,
+      });
+      return;
+    }
 
     const tx = await UsdtBep20Service.findMatchingTransfer(expectedAmount, orderTimestamp);
 
