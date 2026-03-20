@@ -9,19 +9,36 @@ function buildStatusUpdate({ paymentStatus, paymentReference }) {
     values.push(paymentReference);
   }
   if (['completed', 'failed', 'expired', 'rejected'].includes(paymentStatus)) {
-    fields.push("completed_at = datetime('now')");
+    fields.push('completed_at = ?');
+    values.push(new Date().toISOString());
   }
 
   return { fields, values };
 }
 
+/**
+ * Generate a random 10-digit numeric order ID (1000000000–9999999999).
+ */
+function generateOrderId() {
+  return Math.floor(1000000000 + Math.random() * 9000000000);
+}
+
 const Purchase = {
   create({ telegramUserId, amount, creditsAdded, paymentProvider = null, paymentMethod = null, uniqueAmount = null, checkoutUrl = null, paymentReference = null }) {
-    const result = getDb().prepare(
-      `INSERT INTO purchases (telegram_user_id, amount, credits_added, payment_provider, payment_status, payment_method, unique_amount, checkout_url, payment_reference)
-       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)`
-    ).run(telegramUserId, amount, creditsAdded, paymentProvider, paymentMethod, uniqueAmount, checkoutUrl, paymentReference);
-    return result.lastInsertRowid;
+    let orderId;
+    let attempts = 0;
+    do {
+      orderId = generateOrderId();
+      attempts++;
+    } while (
+      getDb().prepare('SELECT 1 FROM purchases WHERE id = ?').get(orderId) && attempts < 10
+    );
+
+    getDb().prepare(
+      `INSERT INTO purchases (id, telegram_user_id, amount, credits_added, payment_provider, payment_status, payment_method, unique_amount, checkout_url, payment_reference)
+       VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`
+    ).run(orderId, telegramUserId, amount, creditsAdded, paymentProvider, paymentMethod, uniqueAmount, checkoutUrl, paymentReference);
+    return orderId;
   },
 
   updateStatus(id, { paymentStatus, paymentReference }) {
@@ -50,12 +67,48 @@ const Purchase = {
   },
 
   /**
-   * Check if a unique amount is already used by an active order
+   * Get only blockchain-based pending orders (for the payment monitor).
+   */
+  getPendingBlockchain() {
+    return getDb().prepare(
+      `SELECT * FROM purchases
+       WHERE payment_status = 'pending'
+         AND payment_provider IN ('usdt_bep20', 'usdt_trc20')
+       ORDER BY created_at ASC`
+    ).all();
+  },
+
+  /**
+   * Expire pending orders older than the given number of minutes.
+   * Returns the list of expired orders (for notification purposes).
+   */
+  expirePendingOrders(expiryMinutes) {
+    const cutoff = new Date(Date.now() - expiryMinutes * 60 * 1000).toISOString();
+    const expired = getDb().prepare(
+      `SELECT * FROM purchases
+       WHERE payment_status = 'pending' AND created_at < ?`
+    ).all(cutoff);
+
+    if (expired.length > 0) {
+      const now = new Date().toISOString();
+      getDb().prepare(
+        `UPDATE purchases
+         SET payment_status = 'expired', completed_at = ?
+         WHERE payment_status = 'pending' AND created_at < ?`
+      ).run(now, cutoff);
+    }
+
+    return expired;
+  },
+
+  /**
+   * Check if a unique amount is already used by an active order.
+   * Uses ROUND to avoid float vs string comparison issues.
    */
   isUniqueAmountTaken(uniqueAmount) {
     const row = getDb().prepare(
       `SELECT COUNT(*) as count FROM purchases
-       WHERE unique_amount = ? AND payment_status = 'pending'`
+       WHERE ROUND(unique_amount, 3) = ROUND(?, 3) AND payment_status = 'pending'`
     ).get(uniqueAmount);
     return row.count > 0;
   },

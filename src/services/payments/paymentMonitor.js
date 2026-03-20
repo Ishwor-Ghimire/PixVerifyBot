@@ -2,23 +2,31 @@ const Purchase = require('../../db/models/Purchase');
 const UsdtBep20Service = require('./usdtBep20');
 const UsdtTrc20Service = require('./usdtTrc20');
 const PaymentService = require('../paymentService');
+const config = require('../../config');
 const logger = require('../../utils/logger');
 
 let monitorInterval = null;
 let botInstance = null;
 let isChecking = false;
 
+const ORDER_EXPIRY_MINUTES = config.payment.orderExpiryMinutes || 15;
+
 /**
  * Background payment monitor.
- * Polls for completed USDT BEP-20 payments and auto-confirms.
- * Binance Transfer orders are confirmed manually by admin via /confirm.
+ * Polls for completed USDT BEP-20 / TRC-20 payments and auto-confirms.
+ * Binance Transfer orders are confirmed manually by admin.
+ *
+ * Each cycle:
+ *   1. Expire stale orders (older than ORDER_EXPIRY_MINUTES).
+ *   2. Fetch only blockchain-based pending orders.
+ *   3. Check each order against on-chain transfers.
  */
 const PaymentMonitor = {
   start(bot, intervalMs = 15000) {
     botInstance = bot;
     if (monitorInterval) return;
 
-    logger.info('Payment monitor started', { intervalMs });
+    logger.info('Payment monitor started', { intervalMs, orderExpiryMinutes: ORDER_EXPIRY_MINUTES });
     monitorInterval = setInterval(() => this.checkPendingPayments(), intervalMs);
 
     // Run immediately on start
@@ -34,13 +42,15 @@ const PaymentMonitor = {
   },
 
   async checkPendingPayments() {
-    if (isChecking) {
-      return;
-    }
+    if (isChecking) return;
 
     isChecking = true;
     try {
-      const pending = Purchase.getPending();
+      // Step 1: Expire old orders
+      await this.expireStaleOrders();
+
+      // Step 2: Only fetch blockchain-based pending orders
+      const pending = Purchase.getPendingBlockchain();
       if (pending.length === 0) return;
 
       logger.info('Payment monitor cycle', {
@@ -49,6 +59,7 @@ const PaymentMonitor = {
           id: p.id,
           provider: p.payment_provider,
           uniqueAmount: p.unique_amount,
+          createdAt: p.created_at,
         })),
       });
 
@@ -74,6 +85,39 @@ const PaymentMonitor = {
     }
   },
 
+  /**
+   * Mark orders older than ORDER_EXPIRY_MINUTES as expired and notify users.
+   */
+  async expireStaleOrders() {
+    const expired = Purchase.expirePendingOrders(ORDER_EXPIRY_MINUTES);
+    if (expired.length === 0) return;
+
+    logger.info('Expired stale orders', {
+      count: expired.length,
+      orderIds: expired.map(o => o.id),
+    });
+
+    if (!botInstance) return;
+
+    for (const order of expired) {
+      try {
+        await botInstance.sendMessage(order.telegram_user_id, [
+          '⏰ *Order Expired*',
+          '',
+          `📋 Order #${order.id} has expired (no payment received within ${ORDER_EXPIRY_MINUTES} minutes).`,
+          '',
+          'Use /buy to create a new order.',
+        ].join('\n'), { parse_mode: 'Markdown' });
+      } catch (err) {
+        logger.warn('Could not notify user of order expiry', {
+          userId: order.telegram_user_id,
+          orderId: order.id,
+          error: err.message,
+        });
+      }
+    }
+  },
+
   async checkUsdtPayment(purchase) {
     const expectedAmount = parseFloat(purchase.unique_amount);
     if (!expectedAmount) {
@@ -81,20 +125,23 @@ const PaymentMonitor = {
       return;
     }
 
-    logger.info('Checking BEP-20 payment', {
-      purchaseId: purchase.id,
-      expectedAmount,
-      createdAt: purchase.created_at,
-    });
-
+    // Parse created_at as UTC (ISO string ends with Z)
     const orderTimestamp = Math.floor(new Date(purchase.created_at).getTime() / 1000) - 60;
     if (!Number.isFinite(orderTimestamp)) {
       logger.warn('BEP-20 order has invalid created_at timestamp', {
         purchaseId: purchase.id,
         createdAt: purchase.created_at,
+        parsedTimestamp: orderTimestamp,
       });
       return;
     }
+
+    logger.info('Checking BEP-20 payment', {
+      purchaseId: purchase.id,
+      expectedAmount,
+      createdAt: purchase.created_at,
+      orderTimestampUtc: orderTimestamp,
+    });
 
     const tx = await UsdtBep20Service.findMatchingTransfer(expectedAmount, orderTimestamp);
 
@@ -125,6 +172,13 @@ const PaymentMonitor = {
     if (!expectedAmount) return;
 
     const orderTimestamp = Math.floor(new Date(purchase.created_at).getTime() / 1000) - 60;
+    if (!Number.isFinite(orderTimestamp)) {
+      logger.warn('TRC-20 order has invalid created_at timestamp', {
+        purchaseId: purchase.id,
+        createdAt: purchase.created_at,
+      });
+      return;
+    }
 
     const tx = await UsdtTrc20Service.findMatchingTransfer(expectedAmount, orderTimestamp);
     if (!tx) return;
@@ -142,6 +196,7 @@ const PaymentMonitor = {
   async confirmPurchase(purchase, reference) {
     const result = PaymentService.confirmPayment(purchase.id, reference);
     if (!result.success) {
+      logger.warn('confirmPayment failed', { purchaseId: purchase.id, error: result.error });
       return false;
     }
 

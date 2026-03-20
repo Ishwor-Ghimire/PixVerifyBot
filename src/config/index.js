@@ -103,7 +103,7 @@ const config = Object.freeze({
 
   payment: {
     monitorIntervalMs: parseInt(optional('PAYMENT_MONITOR_INTERVAL_MS', '15000'), 10),
-    orderExpiryMinutes: parseInt(optional('PAYMENT_ORDER_EXPIRY_MINUTES', '60'), 10),
+    orderExpiryMinutes: parseInt(optional('PAYMENT_ORDER_EXPIRY_MINUTES', '15'), 10),
 
     usdt: {
       walletAddress: optional('USDT_BEP20_WALLET_ADDRESS', ''),

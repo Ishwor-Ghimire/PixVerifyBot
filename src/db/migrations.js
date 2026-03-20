@@ -6,8 +6,8 @@ function runMigrations(db) {
       telegram_user_id INTEGER PRIMARY KEY,
       username TEXT,
       first_name TEXT,
-      created_at TEXT DEFAULT (datetime('now')),
-      last_active_at TEXT DEFAULT (datetime('now')),
+      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      last_active_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
       is_admin INTEGER DEFAULT 0,
       credit_balance REAL DEFAULT 0
     );
@@ -21,7 +21,7 @@ function runMigrations(db) {
       result_url TEXT,
       error_code TEXT,
       credits_used REAL DEFAULT 1,
-      created_at TEXT DEFAULT (datetime('now')),
+      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
       completed_at TEXT,
       FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id)
     );
@@ -37,7 +37,7 @@ function runMigrations(db) {
       payment_method TEXT,
       unique_amount REAL,
       checkout_url TEXT,
-      created_at TEXT DEFAULT (datetime('now')),
+      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
       completed_at TEXT,
       FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id)
     );
@@ -47,6 +47,27 @@ function runMigrations(db) {
     CREATE INDEX IF NOT EXISTS idx_purchases_user ON purchases(telegram_user_id);
     CREATE INDEX IF NOT EXISTS idx_purchases_status ON purchases(payment_status);
   `);
+
+  // Migrate any old-format timestamps (YYYY-MM-DD HH:MM:SS) to ISO 8601 UTC (YYYY-MM-DDTHH:MM:SSZ)
+  // Old rows used datetime('now') which stored without timezone marker.
+  // New rows use strftime('%Y-%m-%dT%H:%M:%SZ','now').
+  const tables = ['users', 'generations', 'purchases'];
+  const timestampCols = {
+    users: ['created_at', 'last_active_at'],
+    generations: ['created_at', 'completed_at'],
+    purchases: ['created_at', 'completed_at'],
+  };
+  for (const table of tables) {
+    for (const col of timestampCols[table]) {
+      db.prepare(
+        `UPDATE ${table}
+         SET ${col} = REPLACE(${col}, ' ', 'T') || 'Z'
+         WHERE ${col} IS NOT NULL
+           AND ${col} NOT LIKE '%Z'
+           AND ${col} NOT LIKE '%T%'`
+      ).run();
+    }
+  }
 
   logger.info('Database migrations completed');
 }

@@ -244,7 +244,7 @@ async function handleUsdtPayment(bot, chatId, userId, pkg) {
     '• Use only the *BSC (BEP-20)* network',
     '• Your credits will be added *automatically* once the transaction is confirmed',
     '',
-    '⏱️ This order expires in 60 minutes.',
+    '⏱️ This order expires in 15 minutes.',
   ].join('\n');
 
   await bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
@@ -272,7 +272,7 @@ async function handleUsdtTrc20Payment(bot, chatId, userId, pkg) {
     '• Use only the *TRON (TRC-20)* network',
     '• Your credits will be added *automatically* once the transaction is confirmed',
     '',
-    '⏱️ This order expires in 60 minutes.',
+    '⏱️ This order expires in 15 minutes.',
   ].join('\n');
 
   await bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
@@ -300,7 +300,7 @@ async function handleBinanceTransfer(bot, chatId, userId, pkg) {
     `3. Send exactly *$${pkg.price} USDT*`,
     '4. After sending, tap *"I\'ve Paid"* below and send your Transaction ID',
     '',
-    '⏱️ This order expires in 60 minutes.',
+    '⏱️ This order expires in 15 minutes.',
   ].join('\n');
 
   await bot.sendMessage(chatId, msg, {
