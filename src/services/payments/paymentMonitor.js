@@ -1,5 +1,4 @@
 const Purchase = require('../../db/models/Purchase');
-const UsdtBep20Service = require('./usdtBep20');
 const UsdtTrc20Service = require('./usdtTrc20');
 const PaymentService = require('../paymentService');
 const config = require('../../config');
@@ -65,11 +64,10 @@ const PaymentMonitor = {
 
       for (const purchase of pending) {
         try {
-          if (purchase.payment_provider === 'usdt_bep20') {
-            await this.checkUsdtPayment(purchase);
-          } else if (purchase.payment_provider === 'usdt_trc20') {
+          if (purchase.payment_provider === 'usdt_trc20') {
             await this.checkUsdtTrc20Payment(purchase);
           }
+          // BEP-20 is verified on-demand via tx hash (no polling needed)
         } catch (err) {
           logger.error('Payment check error', {
             purchaseId: purchase.id,
@@ -116,55 +114,6 @@ const PaymentMonitor = {
         });
       }
     }
-  },
-
-  async checkUsdtPayment(purchase) {
-    const expectedAmount = parseFloat(purchase.unique_amount);
-    if (!expectedAmount) {
-      logger.warn('BEP-20 order has no unique_amount', { purchaseId: purchase.id });
-      return;
-    }
-
-    // Parse created_at as UTC (ISO string ends with Z)
-    const orderTimestamp = Math.floor(new Date(purchase.created_at).getTime() / 1000) - 60;
-    if (!Number.isFinite(orderTimestamp)) {
-      logger.warn('BEP-20 order has invalid created_at timestamp', {
-        purchaseId: purchase.id,
-        createdAt: purchase.created_at,
-        parsedTimestamp: orderTimestamp,
-      });
-      return;
-    }
-
-    logger.info('Checking BEP-20 payment', {
-      purchaseId: purchase.id,
-      expectedAmount,
-      createdAt: purchase.created_at,
-      orderTimestampUtc: orderTimestamp,
-    });
-
-    const tx = await UsdtBep20Service.findMatchingTransfer(expectedAmount, orderTimestamp);
-
-    if (!tx) {
-      logger.info('No matching BEP-20 transfer found yet', { purchaseId: purchase.id, expectedAmount });
-      return;
-    }
-
-    logger.info('BEP-20 transfer MATCHED!', {
-      purchaseId: purchase.id,
-      txHash: tx.hash,
-      txAmount: tx.amount,
-      expectedAmount,
-    });
-
-    const confirmed = await this.confirmPurchase(purchase, tx.hash);
-    if (!confirmed) return;
-
-    logger.info('USDT BEP-20 payment confirmed', {
-      purchaseId: purchase.id,
-      txHash: tx.hash,
-      amount: tx.amount,
-    });
   },
 
   async checkUsdtTrc20Payment(purchase) {

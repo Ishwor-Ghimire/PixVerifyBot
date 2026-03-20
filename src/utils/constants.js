@@ -90,6 +90,7 @@ const CALLBACKS = {
   ADMIN_CONFIRM: 'adm_cfm_',
   ADMIN_REJECT: 'adm_rej_',
   BINANCE_PAID: 'bnc_paid_',
+  CRYPTO_PAID: 'crypto_paid_',
 
   // Admin Panel Callbacks
   ADMIN_MENU: 'adm_menu',

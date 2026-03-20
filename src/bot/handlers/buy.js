@@ -1,9 +1,10 @@
 const config = require('../../config');
 const PaymentService = require('../../services/paymentService');
+const UsdtBep20Service = require('../../services/payments/usdtBep20');
 const { MESSAGES, CALLBACKS } = require('../../utils/constants');
 const logger = require('../../utils/logger');
 
-// Track users waiting to submit Binance order IDs
+// Track users waiting to submit transaction IDs / hashes
 const pendingVerifications = new Map();
 
 function register(bot) {
@@ -101,6 +102,41 @@ function register(bot) {
     }
   });
 
+  // Handle "I've Paid" button for BEP20/TRC20 crypto payments
+  bot.on('callback_query', async (query) => {
+    if (!query.data?.startsWith(CALLBACKS.CRYPTO_PAID)) return;
+
+    const payload = query.data.replace(CALLBACKS.CRYPTO_PAID, '');
+    // payload format: orderId_method (e.g. "1234567890_usdt_bep20")
+    const firstUnderscore = payload.indexOf('_');
+    const orderId = parseInt(payload.substring(0, firstUnderscore), 10);
+    const method = payload.substring(firstUnderscore + 1);
+    const userId = query.from.id;
+
+    await bot.answerCallbackQuery(query.id);
+
+    // Store that this user needs to submit a tx hash
+    pendingVerifications.set(userId, { orderId, chatId: query.message.chat.id, method });
+
+    // Auto-expire after 30 minutes
+    setTimeout(() => pendingVerifications.delete(userId), 30 * 60 * 1000);
+
+    const networkName = method === 'usdt_bep20' ? 'BSC (BEP-20)' : 'TRON (TRC-20)';
+    const explorerHint = method === 'usdt_bep20'
+      ? '_You can find it in your wallet app under transaction details, or on bscscan.com_'
+      : '_You can find it in your wallet app under transaction details, or on tronscan.org_';
+
+    await bot.sendMessage(query.message.chat.id, [
+      '🔍 *Payment Verification*',
+      '',
+      `📋 Order #${orderId}`,
+      '',
+      `Please send your *${networkName} transaction hash* (TX ID) now.`,
+      '',
+      explorerHint,
+    ].join('\n'), { parse_mode: 'Markdown' });
+  });
+
   // Handle "I've paid" button for Binance Transfer
   bot.on('callback_query', async (query) => {
     if (!query.data?.startsWith(CALLBACKS.BINANCE_PAID)) return;
@@ -111,7 +147,7 @@ function register(bot) {
     await bot.answerCallbackQuery(query.id);
 
     // Store that this user needs to submit a transaction ID
-    pendingVerifications.set(userId, { orderId, chatId: query.message.chat.id });
+    pendingVerifications.set(userId, { orderId, chatId: query.message.chat.id, method: 'binance_transfer' });
 
     // Auto-expire after 30 minutes
     setTimeout(() => pendingVerifications.delete(userId), 30 * 60 * 1000);
@@ -127,7 +163,7 @@ function register(bot) {
     ].join('\n'), { parse_mode: 'Markdown' });
   });
 
-  // Listen for Binance order/transaction ID submission from users
+  // Listen for transaction ID / hash submission from users
   bot.on('message', async (msg) => {
     if (!msg.text || msg.text.startsWith('/')) return;
 
@@ -142,70 +178,14 @@ function register(bot) {
       return bot.sendMessage(msg.chat.id, '⚠️ That doesn\'t look like a valid Transaction ID. Please try again.');
     }
 
-    pendingVerifications.delete(userId);
-
-    // Save the transaction ID as payment reference on the order
-    try {
-      const Purchase = require('../../db/models/Purchase');
-      const purchase = Purchase.getById(pending.orderId);
-      if (purchase && purchase.payment_status === 'pending') {
-        Purchase.updateStatusIfPending(pending.orderId, {
-          paymentStatus: 'pending', // keep pending for admin
-          paymentReference: `binance_txid_${submittedId}`,
-        });
-      }
-    } catch (e) {
-      logger.error('Error saving payment reference', { error: e.message });
+    // Route based on payment method
+    if (pending.method === 'usdt_bep20') {
+      await handleBep20TxVerification(bot, msg, pending, submittedId);
+    } else if (pending.method === 'usdt_trc20') {
+      await handleTrc20TxVerification(bot, msg, pending, submittedId);
+    } else if (pending.method === 'binance_transfer') {
+      await handleBinanceTxSubmission(bot, msg, pending, submittedId);
     }
-
-    // Tell the user to wait
-    await bot.sendMessage(msg.chat.id, [
-      '✅ *Payment Submitted!*',
-      '',
-      `📋 Order #${pending.orderId}`,
-      `🔖 Transaction ID: \`${submittedId}\``,
-      '',
-      '⏳ Please wait for an admin to verify and confirm your payment.',
-      'You will be notified once your credits are added.',
-      '',
-      '_This usually takes a few minutes._',
-    ].join('\n'), { parse_mode: 'Markdown' });
-
-    // Notify all admins
-    const adminIds = config.admin.userIds;
-    const username = msg.from.username ? `@${msg.from.username}` : `ID:${userId}`;
-
-    for (const adminId of adminIds) {
-      try {
-        await bot.sendMessage(adminId, [
-          '🔔 *New Binance Pay Payment Submitted*',
-          '',
-          `👤 User: ${username} (ID: \`${userId}\`)`,
-          `📋 Order: #${pending.orderId}`,
-          `🔖 Transaction ID: \`${submittedId}\``,
-          '',
-          'Please verify this payment in your Binance app and then confirm or reject below.',
-        ].join('\n'), {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: '✅ Confirm Payment', callback_data: `${CALLBACKS.ADMIN_CONFIRM}${pending.orderId}` },
-                { text: '❌ Reject', callback_data: `${CALLBACKS.ADMIN_REJECT}${pending.orderId}` },
-              ],
-            ],
-          },
-        });
-      } catch (e) {
-        logger.error('Failed to notify admin', { adminId, error: e.message });
-      }
-    }
-
-    logger.info('Binance payment submitted for admin review', {
-      orderId: pending.orderId,
-      userId,
-      transactionId: submittedId,
-    });
   });
 
   // Handle pay cancel
@@ -223,7 +203,212 @@ function register(bot) {
 }
 
 /**
- * Handle USDT BEP-20 payment flow (auto-detected via blockchain)
+ * Handle BEP-20 tx hash verification (auto-verify via blockchain)
+ */
+async function handleBep20TxVerification(bot, msg, pending, txHash) {
+  const userId = msg.from.id;
+  pendingVerifications.delete(userId);
+
+  // Validate tx hash format
+  if (!/^0x[a-fA-F0-9]{64}$/i.test(txHash)) {
+    return bot.sendMessage(msg.chat.id, [
+      '⚠️ *Invalid Transaction Hash*',
+      '',
+      'A BSC transaction hash should start with `0x` followed by 64 hex characters.',
+      'Example: `0x1a2b3c...`',
+      '',
+      'Please check and try /buy again.',
+    ].join('\n'), { parse_mode: 'Markdown' });
+  }
+
+  await bot.sendMessage(msg.chat.id, '⏳ Verifying your transaction on the blockchain...');
+
+  const Purchase = require('../../db/models/Purchase');
+  const purchase = Purchase.getById(pending.orderId);
+  if (!purchase || purchase.payment_status !== 'pending') {
+    return bot.sendMessage(msg.chat.id, '⚠️ This order is no longer pending.');
+  }
+
+  const expectedAmount = parseFloat(purchase.unique_amount);
+  const result = await UsdtBep20Service.verifyTransaction(txHash, expectedAmount);
+
+  if (result.verified) {
+    // Auto-confirm the payment
+    const confirmation = PaymentService.confirmPayment(pending.orderId, txHash);
+    if (confirmation.success) {
+      await bot.sendMessage(msg.chat.id, [
+        '✅ *Payment Confirmed!*',
+        '',
+        `💰 *${purchase.credits_added} credits* added to your balance.`,
+        `📋 Order #${pending.orderId}`,
+        `🔗 TX: \`${txHash.substring(0, 18)}...\``,
+        '',
+        'Use /run to generate a link or /balance to check your balance.',
+      ].join('\n'), { parse_mode: 'Markdown' });
+
+      logger.info('BEP-20 payment auto-confirmed via tx hash', {
+        orderId: pending.orderId,
+        txHash,
+        amount: result.amount,
+        userId,
+      });
+    } else {
+      await bot.sendMessage(msg.chat.id, `⚠️ ${confirmation.error || 'Could not confirm order.'}`);
+    }
+  } else {
+    // Verification failed — tell user why and allow retry
+    await bot.sendMessage(msg.chat.id, [
+      '❌ *Verification Failed*',
+      '',
+      `Reason: ${result.reason}`,
+      '',
+      `📋 Order #${pending.orderId}`,
+      '',
+      'If you believe this is an error, please contact support.',
+    ].join('\n'), { parse_mode: 'Markdown' });
+  }
+}
+
+/**
+ * Handle TRC-20 tx hash submission (manual verification by admin)
+ */
+async function handleTrc20TxVerification(bot, msg, pending, txHash) {
+  const userId = msg.from.id;
+  pendingVerifications.delete(userId);
+
+  const Purchase = require('../../db/models/Purchase');
+  const purchase = Purchase.getById(pending.orderId);
+  if (!purchase || purchase.payment_status !== 'pending') {
+    return bot.sendMessage(msg.chat.id, '⚠️ This order is no longer pending.');
+  }
+
+  // Save the tx hash as payment reference
+  try {
+    Purchase.updateStatusIfPending(pending.orderId, {
+      paymentStatus: 'pending',
+      paymentReference: `trc20_txid_${txHash}`,
+    });
+  } catch (e) {
+    logger.error('Error saving TRC-20 payment reference', { error: e.message });
+  }
+
+  await bot.sendMessage(msg.chat.id, [
+    '✅ *Transaction Submitted!*',
+    '',
+    `📋 Order #${pending.orderId}`,
+    `🔖 TX Hash: \`${txHash}\``,
+    '',
+    '⏳ Please wait for an admin to verify your payment.',
+    'You will be notified once your credits are added.',
+    '',
+    '_This usually takes a few minutes._',
+  ].join('\n'), { parse_mode: 'Markdown' });
+
+  // Notify admins
+  const adminIds = config.admin.userIds;
+  const username = msg.from.username ? `@${msg.from.username}` : `ID:${userId}`;
+
+  for (const adminId of adminIds) {
+    try {
+      await bot.sendMessage(adminId, [
+        '🔔 *New TRC-20 Payment Submitted*',
+        '',
+        `👤 User: ${username} (ID: \`${userId}\`)`,
+        `📋 Order: #${pending.orderId}`,
+        `💰 Amount: ${purchase.unique_amount} USDT`,
+        `🔖 TX Hash: \`${txHash}\``,
+        '',
+        'Please verify on tronscan.org and then confirm or reject below.',
+      ].join('\n'), {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '✅ Confirm Payment', callback_data: `${CALLBACKS.ADMIN_CONFIRM}${pending.orderId}` },
+              { text: '❌ Reject', callback_data: `${CALLBACKS.ADMIN_REJECT}${pending.orderId}` },
+            ],
+          ],
+        },
+      });
+    } catch (e) {
+      logger.error('Failed to notify admin', { adminId, error: e.message });
+    }
+  }
+}
+
+/**
+ * Handle Binance Transfer tx ID submission (manual verification by admin)
+ */
+async function handleBinanceTxSubmission(bot, msg, pending, submittedId) {
+  const userId = msg.from.id;
+  pendingVerifications.delete(userId);
+
+  // Save the transaction ID as payment reference on the order
+  try {
+    const Purchase = require('../../db/models/Purchase');
+    const purchase = Purchase.getById(pending.orderId);
+    if (purchase && purchase.payment_status === 'pending') {
+      Purchase.updateStatusIfPending(pending.orderId, {
+        paymentStatus: 'pending', // keep pending for admin
+        paymentReference: `binance_txid_${submittedId}`,
+      });
+    }
+  } catch (e) {
+    logger.error('Error saving payment reference', { error: e.message });
+  }
+
+  // Tell the user to wait
+  await bot.sendMessage(msg.chat.id, [
+    '✅ *Payment Submitted!*',
+    '',
+    `📋 Order #${pending.orderId}`,
+    `🔖 Transaction ID: \`${submittedId}\``,
+    '',
+    '⏳ Please wait for an admin to verify and confirm your payment.',
+    'You will be notified once your credits are added.',
+    '',
+    '_This usually takes a few minutes._',
+  ].join('\n'), { parse_mode: 'Markdown' });
+
+  // Notify all admins
+  const adminIds = config.admin.userIds;
+  const username = msg.from.username ? `@${msg.from.username}` : `ID:${userId}`;
+
+  for (const adminId of adminIds) {
+    try {
+      await bot.sendMessage(adminId, [
+        '🔔 *New Binance Pay Payment Submitted*',
+        '',
+        `👤 User: ${username} (ID: \`${userId}\`)`,
+        `📋 Order: #${pending.orderId}`,
+        `🔖 Transaction ID: \`${submittedId}\``,
+        '',
+        'Please verify this payment in your Binance app and then confirm or reject below.',
+      ].join('\n'), {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '✅ Confirm Payment', callback_data: `${CALLBACKS.ADMIN_CONFIRM}${pending.orderId}` },
+              { text: '❌ Reject', callback_data: `${CALLBACKS.ADMIN_REJECT}${pending.orderId}` },
+            ],
+          ],
+        },
+      });
+    } catch (e) {
+      logger.error('Failed to notify admin', { adminId, error: e.message });
+    }
+  }
+
+  logger.info('Binance payment submitted for admin review', {
+    orderId: pending.orderId,
+    userId,
+    transactionId: submittedId,
+  });
+}
+
+/**
+ * Handle USDT BEP-20 payment flow
  */
 async function handleUsdtPayment(bot, chatId, userId, pkg) {
   const order = PaymentService.createUsdtOrder(userId, pkg);
@@ -242,16 +427,24 @@ async function handleUsdtPayment(bot, chatId, userId, pkg) {
     '⚠️ *Important:*',
     '• Send the *exact amount* shown above',
     '• Use only the *BSC (BEP-20)* network',
-    '• Your credits will be added *automatically* once the transaction is confirmed',
+    '• After sending, tap *"I\'ve Paid"* and paste your transaction hash',
     '',
     '⏱️ This order expires in 15 minutes.',
   ].join('\n');
 
-  await bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
+  await bot.sendMessage(chatId, msg, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '✅ I\'ve Paid', callback_data: `${CALLBACKS.CRYPTO_PAID}${order.orderId}_usdt_bep20` }],
+        [{ text: '❌ Cancel', callback_data: CALLBACKS.PAY_CANCEL }],
+      ],
+    },
+  });
 }
 
 /**
- * Handle USDT TRC-20 payment flow (auto-detected via blockchain)
+ * Handle USDT TRC-20 payment flow
  */
 async function handleUsdtTrc20Payment(bot, chatId, userId, pkg) {
   const order = PaymentService.createUsdtTrc20Order(userId, pkg);
@@ -270,12 +463,20 @@ async function handleUsdtTrc20Payment(bot, chatId, userId, pkg) {
     '⚠️ *Important:*',
     '• Send the *exact amount* shown above',
     '• Use only the *TRON (TRC-20)* network',
-    '• Your credits will be added *automatically* once the transaction is confirmed',
+    '• After sending, tap *"I\'ve Paid"* and paste your transaction hash',
     '',
     '⏱️ This order expires in 15 minutes.',
   ].join('\n');
 
-  await bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
+  await bot.sendMessage(chatId, msg, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '✅ I\'ve Paid', callback_data: `${CALLBACKS.CRYPTO_PAID}${order.orderId}_usdt_trc20` }],
+        [{ text: '❌ Cancel', callback_data: CALLBACKS.PAY_CANCEL }],
+      ],
+    },
+  });
 }
 
 /**
