@@ -91,7 +91,7 @@ function register(bot) {
         { inline_keyboard: [] },
         { chat_id: chatId, message_id: query.message.message_id }
       );
-    } catch {}
+    } catch { }
 
     if (methodId === 'usdt_bep20') {
       await handleUsdtPayment(bot, chatId, userId, pkg);
@@ -239,7 +239,7 @@ function register(bot) {
         chat_id: query.message.chat.id,
         message_id: query.message.message_id,
       });
-    } catch {}
+    } catch { }
   });
 }
 
@@ -262,7 +262,9 @@ async function handleBep20IvePaid(bot, chatId, userId, orderId, messageId) {
   const expectedAmount = parseFloat(purchase.unique_amount);
   const orderTimestamp = Math.floor(new Date(purchase.created_at).getTime() / 1000) - 60;
 
-  const tx = await UsdtBep20Service.findMatchingTransfer(expectedAmount, orderTimestamp);
+  // Pass used hashes so the matcher skips them and finds the next valid transfer
+  const usedHashes = Purchase.getUsedPaymentReferences();
+  const tx = await UsdtBep20Service.findMatchingTransfer(expectedAmount, orderTimestamp, usedHashes);
 
   if (!tx) {
     return bot.sendMessage(chatId, [
@@ -276,16 +278,6 @@ async function handleBep20IvePaid(bot, chatId, userId, orderId, messageId) {
     ].join('\n'), { parse_mode: 'Markdown' });
   }
 
-  // Check if this tx hash has already been used for another order
-  if (Purchase.isPaymentReferenceUsed(tx.hash)) {
-    return bot.sendMessage(chatId, [
-      '❌ *Transaction Already Used*',
-      '',
-      'This transfer has already been credited to another order.',
-      'Please make a new payment with /buy.',
-    ].join('\n'), { parse_mode: 'Markdown' });
-  }
-
   // Auto-confirm!
   const confirmation = PaymentService.confirmPayment(orderId, tx.hash);
   if (confirmation.success) {
@@ -295,7 +287,7 @@ async function handleBep20IvePaid(bot, chatId, userId, orderId, messageId) {
         { inline_keyboard: [] },
         { chat_id: chatId, message_id: messageId }
       );
-    } catch {}
+    } catch { }
 
     await bot.sendMessage(chatId, [
       '✅ *Payment Confirmed!*',
@@ -343,6 +335,9 @@ async function handleTrc20IvePaid(bot, chatId, userId, orderId) {
  */
 async function handleUsdtPayment(bot, chatId, userId, pkg) {
   const order = PaymentService.createUsdtOrder(userId, pkg);
+  if (order.error) {
+    return bot.sendMessage(chatId, `⚠️ ${order.message || 'Could not create order. Please try again.'}`);
+  }
 
   const msg = [
     '💎 *USDT (BEP-20) Payment*',
@@ -379,6 +374,9 @@ async function handleUsdtPayment(bot, chatId, userId, pkg) {
  */
 async function handleUsdtTrc20Payment(bot, chatId, userId, pkg) {
   const order = PaymentService.createUsdtTrc20Order(userId, pkg);
+  if (order.error) {
+    return bot.sendMessage(chatId, `⚠️ ${order.message || 'Could not create order. Please try again.'}`);
+  }
 
   const msg = [
     '🟥 *USDT (TRC-20) Payment*',

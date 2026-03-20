@@ -20,6 +20,14 @@ const PaymentService = {
       attempts++;
     } while (Purchase.isUniqueAmountTaken(uniqueAmount) && attempts < 20);
 
+    if (Purchase.isUniqueAmountTaken(uniqueAmount)) {
+      logger.warn('BEP-20 unique amount collision after 20 attempts', { baseAmount, telegramUserId });
+      return {
+        error: 'AMOUNT_COLLISION',
+        message: 'Too many active orders with similar amounts. Please try again shortly.',
+      };
+    }
+
     const orderId = Purchase.create({
       telegramUserId,
       amount: pkg.price,
@@ -53,6 +61,14 @@ const PaymentService = {
       uniqueAmount = UsdtTrc20Service.generateUniqueAmount(baseAmount);
       attempts++;
     } while (Purchase.isUniqueAmountTaken(uniqueAmount) && attempts < 20);
+
+    if (Purchase.isUniqueAmountTaken(uniqueAmount)) {
+      logger.warn('TRC-20 unique amount collision after 20 attempts', { baseAmount, telegramUserId });
+      return {
+        error: 'AMOUNT_COLLISION',
+        message: 'Too many active orders with similar amounts. Please try again shortly.',
+      };
+    }
 
     const orderId = Purchase.create({
       telegramUserId,

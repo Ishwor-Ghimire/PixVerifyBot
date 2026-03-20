@@ -233,12 +233,15 @@ const UsdtBep20Service = {
 
   /**
    * Find a matching transfer for the expected amount (within tolerance).
-   * Returns the matching transaction, or null.
+   * @param {number} expectedAmount - The unique amount to match
+   * @param {number} afterTimestamp - Only consider transfers after this time
+   * @param {Set<string>} [excludeHashes] - Tx hashes to skip (already used by other orders)
+   * @returns {object|null} The matching transaction, or null
    */
-  async findMatchingTransfer(expectedAmount, afterTimestamp) {
+  async findMatchingTransfer(expectedAmount, afterTimestamp, excludeHashes = null) {
     const normalizedAfterTimestamp = Number.isFinite(afterTimestamp) ? Math.floor(afterTimestamp) : null;
     const transfers = await this.getRecentTransfers(normalizedAfterTimestamp);
-    const tolerance = 0.01;
+    const tolerance = 0.0005; // Half the 0.001 step size — prevents adjacent amount overlap
 
     if (transfers.length > 0) {
       logger.info('BEP-20 findMatchingTransfer comparing', {
@@ -253,9 +256,12 @@ const UsdtBep20Service = {
       if (normalizedAfterTimestamp && tx.timestamp < normalizedAfterTimestamp) {
         continue;
       }
+      if (excludeHashes && excludeHashes.has(tx.hash)) {
+        continue;
+      }
 
       const diff = Math.abs(tx.amount - expectedAmount);
-      if (diff <= tolerance) {
+      if (diff < tolerance) {
         logger.info('BEP-20 MATCH found', { txHash: tx.hash, txAmount: tx.amount, expectedAmount, diff });
         return tx;
       }

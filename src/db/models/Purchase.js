@@ -151,6 +151,18 @@ const Purchase = {
     ).get(reference);
     return row.count > 0;
   },
+
+  /**
+   * Get all payment references used by completed orders as a Set.
+   * Used by findMatchingTransfer to skip already-credited tx hashes.
+   */
+  getUsedPaymentReferences() {
+    const rows = getDb().prepare(
+      `SELECT payment_reference FROM purchases
+       WHERE payment_reference IS NOT NULL AND payment_status = 'completed'`
+    ).all();
+    return new Set(rows.map(r => r.payment_reference));
+  },
 };
 
 module.exports = Purchase;

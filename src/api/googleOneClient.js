@@ -19,7 +19,7 @@ function parseApiError(error) {
   const { status, data } = error.response;
   const detail = data?.detail || {};
   return {
-    code: detail.code || `HTTP_${status}`,
+    code: (detail.code || `HTTP_${status}`).toUpperCase(),
     message: detail.message || error.message,
     status,
   };
@@ -74,11 +74,15 @@ const GoogleOneClient = {
     const startTime = Date.now();
     const { pollIntervalMs, pollTimeoutMs } = config.api;
 
-    while (Date.now() - startTime < pollTimeoutMs) {
+    const isTimedOut = () => Date.now() - startTime >= pollTimeoutMs;
+
+    while (!isTimedOut()) {
       try {
         const status = await this.getJobStatus(jobId);
 
-        if (onProgress) onProgress(status);
+        if (onProgress) {
+          try { await onProgress(status); } catch {}  // await the async callback
+        }
 
         if (status.status === 'success') {
           return { success: true, url: status.url, elapsed: status.elapsed_seconds };
@@ -87,8 +91,16 @@ const GoogleOneClient = {
           return { success: false, error: status.error, elapsed: status.elapsed_seconds };
         }
       } catch (err) {
+        // Terminal HTTP errors (401 invalid key, 404 job not found) should not be retried
+        if (err.response && [401, 404].includes(err.response.status)) {
+          const apiErr = parseApiError(err);
+          return { success: false, error: apiErr.code, elapsed: (Date.now() - startTime) / 1000 };
+        }
         logger.warn('Poll error, retrying', { jobId, error: err.message });
       }
+
+      // Hard guard: re-check timeout after potentially slow operations above
+      if (isTimedOut()) break;
 
       await new Promise(r => setTimeout(r, pollIntervalMs));
     }

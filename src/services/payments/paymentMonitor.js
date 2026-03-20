@@ -131,14 +131,11 @@ const PaymentMonitor = {
       return;
     }
 
-    const tx = await UsdtBep20Service.findMatchingTransfer(expectedAmount, orderTimestamp);
-    if (!tx) return;
+    // Collect already-used tx hashes so findMatchingTransfer skips them
+    const usedHashes = Purchase.getUsedPaymentReferences();
 
-    // Prevent duplicate tx hash reuse
-    if (Purchase.isPaymentReferenceUsed(tx.hash)) {
-      logger.warn('BEP-20 duplicate tx hash detected', { purchaseId: purchase.id, txHash: tx.hash });
-      return;
-    }
+    const tx = await UsdtBep20Service.findMatchingTransfer(expectedAmount, orderTimestamp, usedHashes);
+    if (!tx) return;
 
     const confirmed = await this.confirmPurchase(purchase, tx.hash);
     if (!confirmed) return;
@@ -163,7 +160,10 @@ const PaymentMonitor = {
       return;
     }
 
-    const tx = await UsdtTrc20Service.findMatchingTransfer(expectedAmount, orderTimestamp);
+    // Collect already-used tx hashes so findMatchingTransfer skips them
+    const usedHashes = Purchase.getUsedPaymentReferences();
+
+    const tx = await UsdtTrc20Service.findMatchingTransfer(expectedAmount, orderTimestamp, usedHashes);
     if (!tx) return;
 
     const confirmed = await this.confirmPurchase(purchase, tx.hash);

@@ -164,6 +164,7 @@ async function handleConfirm(bot, query) {
   const statusMsg = await bot.sendMessage(chatId, MESSAGES.RUN_SUBMITTED);
 
   let lastStage = '';
+  const localStartTime = Date.now();
 
   try {
     const result = await GenerationService.startGeneration(
@@ -179,9 +180,10 @@ async function handleConfirm(bot, query) {
           const progress = status.total_stages
             ? ` (${status.stage}/${status.total_stages})`
             : '';
+          const localElapsed = (Date.now() - localStartTime) / 1000;
           try {
             await bot.editMessageText(
-              `⏳ *Processing...*\n\nStage: ${stageLabel}${progress}\nElapsed: ${formatDuration(status.elapsed_seconds || 0)}`,
+              `⏳ *Processing...*\n\nStage: ${stageLabel}${progress}\nElapsed: ${formatDuration(localElapsed)}`,
               { chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
             );
           } catch {}
