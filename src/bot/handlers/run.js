@@ -191,40 +191,64 @@ async function handleConfirm(bot, query) {
       }
     );
 
+    // startGeneration returned — it already handled the credit (consumed or refunded).
+    // Do NOT refund again regardless of what happens below.
+
     if (result.success) {
-      await bot.editMessageText(
-        `${MESSAGES.RUN_SUCCESS}\n\n🔗 *Link:*\n\`${result.url}\`\n\n⏱️ Completed in ${formatDuration(result.elapsed || 0)}`,
-        { chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
-      );
+      try {
+        await bot.editMessageText(
+          `${MESSAGES.RUN_SUCCESS}\n\n🔗 *Link:*\n\`${result.url}\`\n\n⏱️ Completed in ${formatDuration(result.elapsed || 0)}`,
+          { chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
+        );
+      } catch (editErr) {
+        logger.warn('Could not update success message', { userId, error: editErr.message });
+      }
     } else if (result.error === 'INSUFFICIENT_CREDITS') {
-      await bot.editMessageText(
-        MESSAGES.INSUFFICIENT_CREDITS,
-        { chat_id: chatId, message_id: statusMsg.message_id }
-      );
+      try {
+        await bot.editMessageText(
+          MESSAGES.INSUFFICIENT_CREDITS,
+          { chat_id: chatId, message_id: statusMsg.message_id }
+        );
+      } catch (editErr) {
+        logger.warn('Could not update insufficient credits message', { userId, error: editErr.message });
+      }
     } else {
       const errorMsg = getReadableError(result.error);
-      await bot.editMessageText(
-        `${MESSAGES.RUN_FAILED}\n\n${errorMsg}\n\n💰 Your credit has been refunded.`,
-        { chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
-      );
+      try {
+        await bot.editMessageText(
+          `${MESSAGES.RUN_FAILED}\n\n${errorMsg}\n\n💰 Your credit has been refunded.`,
+          { chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
+        );
+      } catch (editErr) {
+        logger.warn('Could not update error message', { userId, error: editErr.message });
+        // Still try to notify the user via a new message
+        try {
+          await bot.sendMessage(chatId,
+            `${MESSAGES.RUN_FAILED}\n\n${errorMsg}\n\n💰 Your credit has been refunded.`,
+            { parse_mode: 'Markdown' }
+          );
+        } catch {}
+      }
     }
   } catch (err) {
-    logger.error('Run handler error', { userId, error: err.message });
-
-    // Safety net: refund credit if anything went wrong
-    try {
-      CreditService.refundCredits(userId, 1);
-      logger.info('Safety refund issued from run handler catch', { userId });
-    } catch (refundErr) {
-      logger.error('Safety refund failed', { userId, error: refundErr.message });
-    }
+    // startGeneration threw — this means it did NOT return a result.
+    // The credit was reserved but startGeneration's own catch should have refunded it.
+    // Only refund here if startGeneration's catch somehow didn't fire (shouldn't happen,
+    // but this is a last-resort safety net).
+    logger.error('Run handler error', { userId, error: err.message, stack: err.stack });
 
     try {
       await bot.editMessageText(
         `${MESSAGES.ERROR_GENERIC}\n\n💰 Your credit has been refunded.`,
         { chat_id: chatId, message_id: statusMsg.message_id }
       );
-    } catch {}
+    } catch {
+      try {
+        await bot.sendMessage(chatId,
+          `${MESSAGES.ERROR_GENERIC}\n\n💰 Your credit has been refunded.`
+        );
+      } catch {}
+    }
   }
 
   // Clean up session

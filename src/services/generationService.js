@@ -54,7 +54,7 @@ const GenerationService = {
       });
 
       // 4. Poll for result
-      const result = await GoogleOneClient.pollJob(submission.job_id, (status) => {
+      const result = await GoogleOneClient.pollJob(submission.job_id, async (status) => {
         // Update generation status as it progresses
         if (status.status === 'running') {
           Generation.updateStatus(generationId, {
@@ -62,7 +62,9 @@ const GenerationService = {
             jobId: submission.job_id,
           });
         }
-        if (onProgress) onProgress(status);
+        if (onProgress) {
+          try { await onProgress(status); } catch {} // Don't let UI callback errors crash the generation
+        }
       });
 
       // 5. Handle result
