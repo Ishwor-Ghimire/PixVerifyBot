@@ -67,6 +67,7 @@ const MESSAGES = {
   RATE_LIMITED: '⏱️ Slow down! Please wait before trying again.',
   ERROR_GENERIC: '⚠️ Something went wrong. Please try again later.',
   ALREADY_RUNNING: '⏳ You already have a generation in progress. Please wait for it to complete.',
+  BACKGROUND_POLLING: '⏰ *Active polling timed out*\n\n🔄 The bot is still monitoring your job in the background.\nYou will be notified automatically when it completes.',
 };
 
 // Generation status labels

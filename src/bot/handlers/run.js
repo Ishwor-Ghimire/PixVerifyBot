@@ -1,7 +1,8 @@
 const GenerationService = require('../../services/generationService');
 const CreditService = require('../../services/creditService');
+const config = require('../../config');
 const { MESSAGES, CALLBACKS } = require('../../utils/constants');
-const { isValidEmail, isValidTotpSecret, maskString, formatDuration } = require('../../utils/helpers');
+const { isValidEmail, isValidTotpSecret, maskString, formatDuration, generateProgressBar } = require('../../utils/helpers');
 const logger = require('../../utils/logger');
 
 // Conversation state tracking per user
@@ -32,10 +33,15 @@ function register(bot) {
       return bot.sendMessage(chatId, MESSAGES.ALREADY_RUNNING);
     }
 
-    // Check balance
-    const balance = CreditService.getBalance(userId);
-    if (balance < 1) {
-      return bot.sendMessage(chatId, MESSAGES.INSUFFICIENT_CREDITS);
+    // Admin check
+    const isAdmin = config.admin.userIds.includes(userId);
+
+    // Check balance (skip for admin)
+    if (!isAdmin) {
+      const balance = CreditService.getBalance(userId);
+      if (balance < 1) {
+        return bot.sendMessage(chatId, MESSAGES.INSUFFICIENT_CREDITS);
+      }
     }
 
     // Start conversation
@@ -163,7 +169,8 @@ async function handleConfirm(bot, query) {
   // Send initial status
   const statusMsg = await bot.sendMessage(chatId, MESSAGES.RUN_SUBMITTED);
 
-  let lastStage = '';
+  const isAdmin = config.admin.userIds.includes(userId);
+  let lastProgressText = '';
   const localStartTime = Date.now();
 
   try {
@@ -172,36 +179,67 @@ async function handleConfirm(bot, query) {
       session.email,
       session.password,
       session.totp,
-      // Progress callback
+      // Progress callback — shows queue position, progress bar, stage label
       async (status) => {
-        const stageLabel = status.stage_label || status.status;
-        if (stageLabel !== lastStage) {
-          lastStage = stageLabel;
-          const progress = status.total_stages
-            ? ` (${status.stage}/${status.total_stages})`
-            : '';
+        let progressMsg = '';
+
+        if (status.status === 'background') {
+          // Switched to background polling
+          progressMsg = MESSAGES.BACKGROUND_POLLING;
+        } else if (status.status === 'queued') {
+          const pos = status.queue_position ?? '...';
+          const wait = status.estimated_wait_seconds ?? '...';
+          progressMsg = [
+            `⏳ *Queued...*`,
+            '',
+            `📧 ${maskString(session.email)}`,
+            `📊 Position: #${pos}`,
+            `⏱️ Est. wait: ~${wait}s`,
+          ].join('\n');
+        } else if (status.status === 'running') {
+          const bar = generateProgressBar(status.stage, status.total_stages);
           const localElapsed = (Date.now() - localStartTime) / 1000;
+          progressMsg = [
+            `⚙️ *Processing...*`,
+            '',
+            `📧 ${maskString(session.email)}`,
+            `${bar}`,
+            `🔄 ${status.stage_label || 'Working...'}`,
+            `⏱️ ${formatDuration(localElapsed)}`,
+          ].join('\n');
+        }
+
+        // Only update if message changed
+        if (progressMsg && progressMsg !== lastProgressText) {
+          lastProgressText = progressMsg;
           try {
-            await bot.editMessageText(
-              `⏳ *Processing...*\n\nStage: ${stageLabel}${progress}\nElapsed: ${formatDuration(localElapsed)}`,
-              { chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
-            );
+            await bot.editMessageText(progressMsg, {
+              chat_id: chatId,
+              message_id: statusMsg.message_id,
+              parse_mode: 'Markdown',
+            });
           } catch {}
         }
-      }
+      },
+      isAdmin
     );
 
-    // startGeneration returned — it already handled the credit (consumed or refunded).
-    // Do NOT refund again regardless of what happens below.
-
+    // Handle result
     if (result.success) {
+      const elapsed = result.elapsed ? formatDuration(result.elapsed) : formatDuration((Date.now() - localStartTime) / 1000);
       try {
         await bot.editMessageText(
-          `${MESSAGES.RUN_SUCCESS}\n\n🔗 *Link:*\n\`${result.url}\`\n\n⏱️ Completed in ${formatDuration(result.elapsed || 0)}`,
+          `${MESSAGES.RUN_SUCCESS}\n\n🔗 *Link:*\n\`${result.url}\`\n\n⏱️ Completed in ${elapsed}`,
           { chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
         );
       } catch (editErr) {
         logger.warn('Could not update success message', { userId, error: editErr.message });
+        try {
+          await bot.sendMessage(chatId,
+            `${MESSAGES.RUN_SUCCESS}\n\n🔗 *Link:*\n\`${result.url}\`\n\n⏱️ Completed in ${elapsed}`,
+            { parse_mode: 'Markdown' }
+          );
+        } catch {}
       }
     } else if (result.error === 'INSUFFICIENT_CREDITS') {
       try {
@@ -209,44 +247,44 @@ async function handleConfirm(bot, query) {
           MESSAGES.INSUFFICIENT_CREDITS,
           { chat_id: chatId, message_id: statusMsg.message_id }
         );
-      } catch (editErr) {
-        logger.warn('Could not update insufficient credits message', { userId, error: editErr.message });
-      }
-    } else {
-      const errorMsg = getReadableError(result.error);
+      } catch {}
+    } else if (result.error === 'ALREADY_QUEUED') {
       try {
         await bot.editMessageText(
-          `${MESSAGES.RUN_FAILED}\n\n${errorMsg}\n\n💰 Your credit has been refunded.`,
+          '⏳ This email is already being processed. Please wait.',
+          { chat_id: chatId, message_id: statusMsg.message_id }
+        );
+      } catch {}
+    } else {
+      const errorMsg = getReadableError(result.error);
+      const refundNote = isAdmin ? '' : '\n\n💰 Your credit has been refunded.';
+      try {
+        await bot.editMessageText(
+          `${MESSAGES.RUN_FAILED}\n\n${errorMsg}${refundNote}`,
           { chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
         );
       } catch (editErr) {
         logger.warn('Could not update error message', { userId, error: editErr.message });
-        // Still try to notify the user via a new message
         try {
           await bot.sendMessage(chatId,
-            `${MESSAGES.RUN_FAILED}\n\n${errorMsg}\n\n💰 Your credit has been refunded.`,
+            `${MESSAGES.RUN_FAILED}\n\n${errorMsg}${refundNote}`,
             { parse_mode: 'Markdown' }
           );
         } catch {}
       }
     }
   } catch (err) {
-    // startGeneration threw — this means it did NOT return a result.
-    // The credit was reserved but startGeneration's own catch should have refunded it.
-    // Only refund here if startGeneration's catch somehow didn't fire (shouldn't happen,
-    // but this is a last-resort safety net).
     logger.error('Run handler error', { userId, error: err.message, stack: err.stack });
 
+    const refundNote = isAdmin ? '' : '\n\n💰 Your credit has been refunded.';
     try {
       await bot.editMessageText(
-        `${MESSAGES.ERROR_GENERIC}\n\n💰 Your credit has been refunded.`,
+        `${MESSAGES.ERROR_GENERIC}${refundNote}`,
         { chat_id: chatId, message_id: statusMsg.message_id }
       );
     } catch {
       try {
-        await bot.sendMessage(chatId,
-          `${MESSAGES.ERROR_GENERIC}\n\n💰 Your credit has been refunded.`
-        );
+        await bot.sendMessage(chatId, `${MESSAGES.ERROR_GENERIC}${refundNote}`);
       } catch {}
     }
   }
@@ -282,6 +320,9 @@ function getReadableError(code) {
     NETWORK_ERROR: '🌐 Cannot reach the generation service.',
     INSUFFICIENT_BALANCE: '💳 API balance insufficient. Contact admin.',
     INTERNAL_ERROR: '⚙️ Internal error. Please try again.',
+    HTTP_402: '💳 API balance insufficient. Contact admin.',
+    HTTP_409: '⏳ This email is already being processed.',
+    HTTP_429: '⏱️ Too many requests. Please wait and try again.',
   };
   return errors[code] || `⚠️ Error: ${code}`;
 }

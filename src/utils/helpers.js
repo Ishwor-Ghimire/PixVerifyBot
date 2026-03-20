@@ -60,6 +60,17 @@ function formatDuration(seconds) {
   return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
 }
 
+/**
+ * Generate a visual progress bar (ported from Api_Pixel_Bot)
+ * e.g. [████░░░░░░] 3/8
+ */
+function generateProgressBar(stage, total) {
+  const size = 10;
+  const filled = total > 0 ? Math.round(size * (stage / total)) : 0;
+  const bar = '█'.repeat(filled) + '░'.repeat(size - filled);
+  return `[${bar}] ${stage}/${total}`;
+}
+
 module.exports = {
   isValidEmail,
   isValidTotpSecret,
@@ -68,4 +79,5 @@ module.exports = {
   maskString,
   escapeMarkdown,
   formatDuration,
+  generateProgressBar,
 };

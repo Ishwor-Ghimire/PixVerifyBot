@@ -18,9 +18,12 @@ function parseApiError(error) {
   }
   const { status, data } = error.response;
   const detail = data?.detail || {};
+  // Handle both string and object detail formats
+  const code = typeof detail === 'string' ? detail : detail.code;
+  const message = typeof detail === 'string' ? detail : detail.message;
   return {
-    code: (detail.code || `HTTP_${status}`).toUpperCase(),
-    message: detail.message || error.message,
+    code: (code || `HTTP_${status}`).toUpperCase(),
+    message: message || error.message,
     status,
   };
 }
@@ -41,16 +44,26 @@ const GoogleOneClient = {
 
   /**
    * Submit a new generation job
+   * @param {string} email
+   * @param {string} password
+   * @param {string} totpSecret
+   * @param {number} priority - 0 = normal, 1 = VIP/admin
    */
-  async submitJob(email, password, totpSecret) {
+  async submitJob(email, password, totpSecret, priority = 0) {
     try {
       const { data } = await client.post('/api/jobs', {
         email,
         password,
         totp_secret: totpSecret,
+        priority,
       });
       logger.info('Job submitted', { jobId: data.job_id, email });
-      return { success: true, ...data };
+      return {
+        success: true,
+        job_id: data.job_id,
+        queue_position: data.queue_position,
+        estimated_wait_seconds: data.estimated_wait_seconds,
+      };
     } catch (err) {
       const apiErr = parseApiError(err);
       logger.warn('Job submission failed', { email, ...apiErr });
@@ -67,45 +80,114 @@ const GoogleOneClient = {
   },
 
   /**
-   * Poll job until terminal state (success/failed) or timeout.
-   * Invokes onProgress callback with each poll result.
+   * Poll job with setInterval-based approach (matching Api_Pixel_Bot).
+   * - Active polling: 3s intervals for up to 5min
+   * - Background fallback: switches to 30s intervals after 5min
+   * - Invokes onProgress with each poll result
+   *
+   * Returns a Promise that resolves when the job reaches a terminal state.
    */
-  async pollJob(jobId, onProgress = null) {
-    const startTime = Date.now();
-    const { pollIntervalMs, pollTimeoutMs } = config.api;
+  pollJob(jobId, onProgress = null) {
+    const ACTIVE_POLL_MS = config.api.pollIntervalMs || 3000;
+    const BG_POLL_MS = 30000;
+    const MAX_ACTIVE_MS = config.api.pollTimeoutMs || 300000; // 5 minutes
 
-    const isTimedOut = () => Date.now() - startTime >= pollTimeoutMs;
+    return new Promise((resolve) => {
+      let elapsed = 0;
+      let currentInterval = ACTIVE_POLL_MS;
+      let isBackground = false;
+      let intervalHandle = null;
 
-    while (!isTimedOut()) {
-      try {
-        const status = await this.getJobStatus(jobId);
-
-        if (onProgress) {
-          try { await onProgress(status); } catch {}  // await the async callback
+      const cleanup = () => {
+        if (intervalHandle) {
+          clearInterval(intervalHandle);
+          intervalHandle = null;
         }
+      };
 
-        if (status.status === 'success') {
-          return { success: true, url: status.url, elapsed: status.elapsed_seconds };
+      const doPoll = async () => {
+        elapsed += currentInterval;
+
+        try {
+          const job = await this.getJobStatus(jobId);
+          const status = job.status?.toLowerCase();
+
+          // Forward progress to caller
+          if (onProgress) {
+            try {
+              await onProgress({
+                status,
+                stage: job.stage ?? 0,
+                total_stages: job.total_stages ?? 8,
+                stage_label: job.stage_label || '',
+                queue_position: job.queue_position ?? -1,
+                estimated_wait_seconds: job.estimated_wait_seconds ?? 0,
+                isBackground,
+              });
+            } catch {} // Don't crash on callback errors
+          }
+
+          // Still in progress
+          if (status === 'queued' || status === 'running') {
+            // Switch to background polling after max active time
+            if (!isBackground && elapsed >= MAX_ACTIVE_MS) {
+              isBackground = true;
+              currentInterval = BG_POLL_MS;
+              cleanup();
+
+              // Notify caller about background switch
+              if (onProgress) {
+                try {
+                  await onProgress({ status: 'background', isBackground: true });
+                } catch {}
+              }
+
+              // Restart with slower interval
+              intervalHandle = setInterval(doPoll, BG_POLL_MS);
+            }
+            return; // Keep polling
+          }
+
+          // Terminal state
+          cleanup();
+
+          if (status === 'success') {
+            resolve({
+              success: true,
+              url: job.url || '',
+              elapsed: job.elapsed_seconds,
+            });
+          } else {
+            // Failed or unknown terminal status
+            resolve({
+              success: false,
+              error: job.error || 'UNKNOWN_ERROR',
+              elapsed: job.elapsed_seconds,
+            });
+          }
+        } catch (err) {
+          // Terminal HTTP errors should stop polling
+          if (err.response && [401, 404].includes(err.response.status)) {
+            cleanup();
+            const apiErr = parseApiError(err);
+            resolve({
+              success: false,
+              error: apiErr.code,
+              elapsed: elapsed / 1000,
+            });
+            return;
+          }
+          // Network errors — keep trying
+          logger.warn('Poll error, retrying', { jobId, error: err.message });
         }
-        if (status.status === 'failed') {
-          return { success: false, error: status.error, elapsed: status.elapsed_seconds };
-        }
-      } catch (err) {
-        // Terminal HTTP errors (401 invalid key, 404 job not found) should not be retried
-        if (err.response && [401, 404].includes(err.response.status)) {
-          const apiErr = parseApiError(err);
-          return { success: false, error: apiErr.code, elapsed: (Date.now() - startTime) / 1000 };
-        }
-        logger.warn('Poll error, retrying', { jobId, error: err.message });
-      }
+      };
 
-      // Hard guard: re-check timeout after potentially slow operations above
-      if (isTimedOut()) break;
+      // Start polling
+      intervalHandle = setInterval(doPoll, currentInterval);
 
-      await new Promise(r => setTimeout(r, pollIntervalMs));
-    }
-
-    return { success: false, error: 'TIMEOUT', elapsed: (Date.now() - startTime) / 1000 };
+      // Also do an immediate first poll
+      doPoll();
+    });
   },
 
   /**
