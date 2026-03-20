@@ -3,24 +3,38 @@ const config = require('../../config');
 const logger = require('../../utils/logger');
 
 // USDT contract on BSC (BEP-20)
-const USDT_CONTRACT = '0x55d398326f99059fF775485246999027B3197955'.toLowerCase();
+const USDT_CONTRACT = '0x55d398326f99059fF775485246999027B3197955';
+const USDT_CONTRACT_LOWER = USDT_CONTRACT.toLowerCase();
 
 // Transfer(address,address,uint256) event topic
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 
-// Free BSC RPC endpoints (fallback chain)
-const RPC_ENDPOINTS = [
+// RPC endpoints that support eth_getLogs without rate limiting.
+// PublicNode and 1rpc are used for log queries (Binance RPCs rate-limit eth_getLogs).
+// Binance RPCs are kept as fallback for simple calls (eth_blockNumber, etc).
+const LOG_RPC_ENDPOINTS = [
+  'https://bsc-rpc.publicnode.com',
+  'https://1rpc.io/bnb',
+];
+
+const FALLBACK_RPC_ENDPOINTS = [
   'https://bsc-dataseed1.binance.org',
   'https://bsc-dataseed2.binance.org',
   'https://bsc-dataseed3.binance.org',
   'https://bsc-dataseed4.binance.org',
 ];
 
-let currentRpcIndex = 0;
+const BSC_AVERAGE_BLOCK_TIME_SECONDS = 3;
+const MIN_LOOKBACK_BLOCKS = 200;
+const BLOCK_LOOKBACK_BUFFER = 120;
+const MAX_BLOCKS_PER_LOG_QUERY = 2000;
+
+let currentLogRpcIndex = 0;
+let currentFallbackRpcIndex = 0;
+const blockTimestampCache = new Map();
 
 /**
- * Parse a hex token amount to a float.
- * USDT on BSC has 18 decimals.
+ * Parse a hex token amount to a float (USDT on BSC = 18 decimals).
  */
 function formatTokenAmount(valueHex, decimals = 18) {
   const valueBigInt = BigInt(valueHex);
@@ -31,20 +45,20 @@ function formatTokenAmount(valueHex, decimals = 18) {
   return parseFloat(fractionText ? `${whole.toString()}.${fractionText}` : whole.toString());
 }
 
+function hexToNumber(value) {
+  if (!value) return 0;
+  return parseInt(value, 16);
+}
+
 /**
- * USDT BEP-20 payment verification via BSC RPC.
+ * USDT BEP-20 fully automatic payment detection.
  *
- * Instead of polling eth_getLogs (which is rate-limited on free RPCs),
- * this service verifies payments by transaction hash using
- * eth_getTransactionReceipt — a single-key lookup that works
- * reliably on all free BSC RPC nodes.
+ * Background monitor polls eth_getLogs via free BSC RPC nodes (PublicNode, 1rpc)
+ * that don't rate-limit log queries. When the user clicks "I've Paid", an
+ * immediate on-chain scan is triggered instead of waiting for the next poll.
  *
- * Flow:
- *   1. User sends USDT to our wallet
- *   2. User submits their tx hash
- *   3. Bot calls eth_getTransactionReceipt to fetch the receipt
- *   4. Parses Transfer event logs to verify recipient + amount
- *   5. Auto-confirms if everything matches
+ * Anti-fraud: duplicate transfers are prevented by checking payment_reference
+ * in the database before confirming (handled by the caller).
  */
 const UsdtBep20Service = {
   /**
@@ -57,12 +71,19 @@ const UsdtBep20Service = {
   },
 
   /**
-   * Make a JSON-RPC call to BSC, with automatic fallback to other nodes.
+   * JSON-RPC call with fallback across multiple endpoints.
+   * @param {string} method - RPC method
+   * @param {Array} params - RPC params
+   * @param {boolean} useLogEndpoints - Use log-friendly endpoints for eth_getLogs
    */
-  async rpcCall(method, params) {
+  async rpcCall(method, params, useLogEndpoints = false) {
+    const endpoints = useLogEndpoints ? LOG_RPC_ENDPOINTS : [...LOG_RPC_ENDPOINTS, ...FALLBACK_RPC_ENDPOINTS];
     let lastError;
-    for (let attempt = 0; attempt < RPC_ENDPOINTS.length; attempt++) {
-      const endpoint = RPC_ENDPOINTS[(currentRpcIndex + attempt) % RPC_ENDPOINTS.length];
+    const startIndex = useLogEndpoints ? currentLogRpcIndex : currentFallbackRpcIndex;
+
+    for (let attempt = 0; attempt < endpoints.length; attempt++) {
+      const idx = (startIndex + attempt) % endpoints.length;
+      const endpoint = endpoints[idx];
       try {
         const { data } = await axios.post(endpoint, {
           jsonrpc: '2.0',
@@ -83,103 +104,163 @@ const UsdtBep20Service = {
           method,
           error: err.message,
         });
-        currentRpcIndex = (currentRpcIndex + 1) % RPC_ENDPOINTS.length;
+        if (useLogEndpoints) {
+          currentLogRpcIndex = (currentLogRpcIndex + 1) % LOG_RPC_ENDPOINTS.length;
+        } else {
+          currentFallbackRpcIndex = (currentFallbackRpcIndex + 1) % endpoints.length;
+        }
       }
     }
     throw lastError;
   },
 
   /**
-   * Verify a USDT BEP-20 payment by transaction hash.
-   *
-   * Fetches the transaction receipt from BSC and checks:
-   *   - Transaction was successful (status 0x1)
-   *   - Contains a Transfer event from the USDT contract
-   *   - The "to" address matches our wallet
-   *   - The amount matches the expected amount (within tolerance)
-   *
-   * @param {string} txHash - Transaction hash (0x...)
-   * @param {number} expectedAmount - Expected USDT amount
-   * @returns {{ verified: boolean, reason?: string, amount?: number, from?: string }}
+   * Fetch a block timestamp and cache it.
    */
-  async verifyTransaction(txHash, expectedAmount) {
-    const { walletAddress } = config.payment.usdt;
-    if (!walletAddress) {
-      return { verified: false, reason: 'USDT BEP-20 wallet not configured.' };
+  async getBlockTimestamp(blockNumber) {
+    if (blockTimestampCache.has(blockNumber)) {
+      return blockTimestampCache.get(blockNumber);
     }
 
-    const normalizedWallet = walletAddress.toLowerCase();
+    const block = await this.rpcCall('eth_getBlockByNumber', [
+      `0x${blockNumber.toString(16)}`,
+      false,
+    ]);
 
-    // Validate tx hash format
-    if (!/^0x[a-fA-F0-9]{64}$/.test(txHash)) {
-      return { verified: false, reason: 'Invalid transaction hash format.' };
+    if (!block || !block.timestamp) {
+      throw new Error(`Missing block data for ${blockNumber}`);
+    }
+
+    const timestamp = hexToNumber(block.timestamp);
+    blockTimestampCache.set(blockNumber, timestamp);
+
+    // Keep cache small
+    if (blockTimestampCache.size > 500) {
+      const oldest = blockTimestampCache.keys().next().value;
+      blockTimestampCache.delete(oldest);
+    }
+
+    return timestamp;
+  },
+
+  /**
+   * Fetch recent USDT BEP-20 Transfer events TO our wallet.
+   * Uses log-friendly RPC endpoints that support eth_getLogs.
+   */
+  async getRecentTransfers(afterTimestamp = null) {
+    const { walletAddress } = config.payment.usdt;
+    if (!walletAddress) {
+      logger.warn('USDT BEP-20 not configured (missing wallet address)');
+      return [];
     }
 
     try {
-      const receipt = await this.rpcCall('eth_getTransactionReceipt', [txHash]);
+      const latestBlockHex = await this.rpcCall('eth_blockNumber', []);
+      const latestBlock = hexToNumber(latestBlockHex);
+      const latestTimestamp = await this.getBlockTimestamp(latestBlock);
 
-      if (!receipt) {
-        return { verified: false, reason: 'Transaction not found. It may still be pending — please wait a minute and try again.' };
-      }
+      let effectiveAfterTimestamp = Number.isFinite(afterTimestamp)
+        ? Math.floor(afterTimestamp)
+        : latestTimestamp - (MIN_LOOKBACK_BLOCKS * BSC_AVERAGE_BLOCK_TIME_SECONDS);
 
-      // Check transaction status (0x1 = success)
-      if (receipt.status !== '0x1') {
-        return { verified: false, reason: 'Transaction failed on the blockchain.' };
-      }
-
-      // Parse logs to find USDT Transfer events to our wallet
-      const transferLogs = (receipt.logs || []).filter(log =>
-        log.address?.toLowerCase() === USDT_CONTRACT &&
-        log.topics?.length >= 3 &&
-        log.topics[0] === TRANSFER_TOPIC
+      const secondsBack = Math.max(0, latestTimestamp - effectiveAfterTimestamp);
+      const blocksBack = Math.max(
+        MIN_LOOKBACK_BLOCKS,
+        Math.ceil(secondsBack / BSC_AVERAGE_BLOCK_TIME_SECONDS) + BLOCK_LOOKBACK_BUFFER
       );
+      const fromBlock = Math.max(0, latestBlock - blocksBack);
 
-      if (transferLogs.length === 0) {
-        return { verified: false, reason: 'No USDT transfer found in this transaction.' };
-      }
+      // Pad wallet address for topic filter (topic2 = "to" address)
+      const paddedWallet = '0x' + walletAddress.toLowerCase().replace('0x', '').padStart(64, '0');
 
-      // Check each Transfer event for a match
-      const tolerance = 0.001; // strict: must match within 0.001 USDT
-      for (const log of transferLogs) {
-        const toAddress = '0x' + log.topics[2].slice(26).toLowerCase();
-        const amount = formatTokenAmount(log.data);
+      const logs = [];
+      for (let batchFrom = fromBlock; batchFrom <= latestBlock; batchFrom += MAX_BLOCKS_PER_LOG_QUERY) {
+        const batchTo = Math.min(latestBlock, batchFrom + MAX_BLOCKS_PER_LOG_QUERY - 1);
 
-        if (toAddress === normalizedWallet) {
-          const diff = Math.abs(amount - expectedAmount);
-          if (diff <= tolerance) {
-            const fromAddress = '0x' + log.topics[1].slice(26).toLowerCase();
-            logger.info('BEP-20 tx hash verified', {
-              txHash,
-              amount,
-              expectedAmount,
-              from: fromAddress,
-            });
-            return {
-              verified: true,
-              amount,
-              from: fromAddress,
-              hash: txHash,
-            };
-          } else {
-            logger.warn('BEP-20 tx amount mismatch', {
-              txHash,
-              amount,
-              expectedAmount,
-              diff,
-            });
-            return {
-              verified: false,
-              reason: `Amount mismatch: transaction sent ${amount} USDT but expected ${expectedAmount} USDT. Please send the exact amount.`,
-            };
-          }
+        // Use log-friendly endpoints for eth_getLogs
+        const batchLogs = await this.rpcCall('eth_getLogs', [{
+          fromBlock: `0x${batchFrom.toString(16)}`,
+          toBlock: `0x${batchTo.toString(16)}`,
+          address: USDT_CONTRACT,
+          topics: [
+            TRANSFER_TOPIC,
+            null,
+            paddedWallet,
+          ],
+        }], true);
+
+        if (!Array.isArray(batchLogs)) {
+          logger.warn('Unexpected eth_getLogs response', { batchFrom, batchTo, batchLogs });
+          continue;
         }
+
+        logs.push(...batchLogs);
       }
 
-      return { verified: false, reason: 'This transaction was not sent to our wallet address.' };
+      // Resolve block timestamps
+      const blockNumbers = [...new Set(logs.map(log => hexToNumber(log.blockNumber)).filter(Boolean))];
+      const blockTimestamps = new Map();
+      for (const blockNumber of blockNumbers) {
+        blockTimestamps.set(blockNumber, await this.getBlockTimestamp(blockNumber));
+      }
+
+      const transfers = logs.map(log => {
+        const blockNumber = hexToNumber(log.blockNumber);
+        return {
+          hash: log.transactionHash,
+          from: '0x' + log.topics[1].slice(26),
+          amount: formatTokenAmount(log.data),
+          timestamp: blockTimestamps.get(blockNumber) || latestTimestamp,
+          blockNumber,
+        };
+      }).filter(tx => tx.timestamp >= effectiveAfterTimestamp)
+        .sort((a, b) => a.blockNumber - b.blockNumber);
+
+      if (transfers.length > 0) {
+        logger.info('BSC RPC: incoming USDT transfers found', {
+          count: transfers.length,
+          latestAmount: transfers[transfers.length - 1].amount,
+          blockRange: `${fromBlock}-${latestBlock}`,
+        });
+      }
+
+      return transfers;
     } catch (err) {
-      logger.error('BEP-20 tx verification error', { txHash, error: err.message });
-      return { verified: false, reason: 'Could not verify transaction. Please try again in a moment.' };
+      logger.error('BSC RPC error fetching transfers', { error: err.message });
+      return [];
     }
+  },
+
+  /**
+   * Find a matching transfer for the expected amount (within tolerance).
+   * Returns the matching transaction, or null.
+   */
+  async findMatchingTransfer(expectedAmount, afterTimestamp) {
+    const normalizedAfterTimestamp = Number.isFinite(afterTimestamp) ? Math.floor(afterTimestamp) : null;
+    const transfers = await this.getRecentTransfers(normalizedAfterTimestamp);
+    const tolerance = 0.01;
+
+    if (transfers.length > 0) {
+      logger.info('BEP-20 findMatchingTransfer comparing', {
+        expectedAmount,
+        tolerance,
+        transferCount: transfers.length,
+        transferAmounts: transfers.slice(0, 10).map(t => t.amount),
+      });
+    }
+
+    for (const tx of transfers) {
+      if (normalizedAfterTimestamp && tx.timestamp < normalizedAfterTimestamp) {
+        continue;
+      }
+
+      const diff = Math.abs(tx.amount - expectedAmount);
+      if (diff <= tolerance) {
+        logger.info('BEP-20 MATCH found', { txHash: tx.hash, txAmount: tx.amount, expectedAmount, diff });
+        return tx;
+      }
+    }
+    return null;
   },
 };
 
