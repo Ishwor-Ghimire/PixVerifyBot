@@ -139,6 +139,18 @@ const Purchase = {
       totalCreditsSold: row.total_credits_sold || 0,
     };
   },
+  /**
+   * Check if a payment reference (tx hash) has already been used by a completed order.
+   * Prevents the same transaction from being submitted to multiple orders.
+   */
+  isPaymentReferenceUsed(reference) {
+    if (!reference) return false;
+    const row = getDb().prepare(
+      `SELECT COUNT(*) as count FROM purchases
+       WHERE payment_reference = ? AND payment_status = 'completed'`
+    ).get(reference);
+    return row.count > 0;
+  },
 };
 
 module.exports = Purchase;

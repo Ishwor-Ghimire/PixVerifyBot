@@ -139,7 +139,7 @@ const UsdtBep20Service = {
       }
 
       // Check each Transfer event for a match
-      const tolerance = 0.01; // allow small rounding difference
+      const tolerance = 0.001; // strict: must match within 0.001 USDT
       for (const log of transferLogs) {
         const toAddress = '0x' + log.topics[2].slice(26).toLowerCase();
         const amount = formatTokenAmount(log.data);

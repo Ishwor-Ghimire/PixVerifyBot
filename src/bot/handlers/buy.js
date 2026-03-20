@@ -233,6 +233,18 @@ async function handleBep20TxVerification(bot, msg, pending, txHash) {
   const result = await UsdtBep20Service.verifyTransaction(txHash, expectedAmount);
 
   if (result.verified) {
+    // Check if this tx hash has already been used for another order
+    if (Purchase.isPaymentReferenceUsed(txHash)) {
+      return bot.sendMessage(msg.chat.id, [
+        '❌ *Transaction Already Used*',
+        '',
+        'This transaction hash has already been used to confirm another order.',
+        'Each transaction can only be used once.',
+        '',
+        'Please make a new payment and try again with /buy.',
+      ].join('\n'), { parse_mode: 'Markdown' });
+    }
+
     // Auto-confirm the payment
     const confirmation = PaymentService.confirmPayment(pending.orderId, txHash);
     if (confirmation.success) {
