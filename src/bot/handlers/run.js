@@ -229,14 +229,14 @@ async function handleConfirm(bot, query) {
       const elapsed = result.elapsed ? formatDuration(result.elapsed) : formatDuration((Date.now() - localStartTime) / 1000);
       try {
         await bot.editMessageText(
-          `${MESSAGES.RUN_SUCCESS}\n\n🔗 *Link:*\n\`${result.url}\`\n\n⏱️ Completed in ${elapsed}`,
+          `${MESSAGES.RUN_SUCCESS}\n\n\`${result.url}\`\n\n⏱️ Completed in ${elapsed}`,
           { chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
         );
       } catch (editErr) {
         logger.warn('Could not update success message', { userId, error: editErr.message });
         try {
           await bot.sendMessage(chatId,
-            `${MESSAGES.RUN_SUCCESS}\n\n🔗 *Link:*\n\`${result.url}\`\n\n⏱️ Completed in ${elapsed}`,
+            `${MESSAGES.RUN_SUCCESS}\n\n\`${result.url}\`\n\n⏱️ Completed in ${elapsed}`,
             { parse_mode: 'Markdown' }
           );
         } catch {}

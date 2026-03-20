@@ -26,7 +26,7 @@ function initDatabase() {
 
   // Performance optimizations
   db.pragma('journal_mode = WAL');
-  db.pragma('synchronous = NORMAL');
+  db.pragma('synchronous = FULL');
   db.pragma('foreign_keys = ON');
 
   runMigrations(db);
@@ -37,6 +37,13 @@ function initDatabase() {
 
 function closeDatabase() {
   if (db) {
+    try {
+      // Checkpoint WAL to merge pending writes into the main DB file
+      // This prevents data loss (e.g. credit balance) on hard restart
+      db.pragma('wal_checkpoint(TRUNCATE)');
+    } catch (err) {
+      logger.error('WAL checkpoint failed', { error: err.message });
+    }
     db.close();
     db = null;
     logger.info('Database connection closed');

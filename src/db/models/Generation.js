@@ -1,11 +1,11 @@
 const { getDb } = require('../database');
 
 const Generation = {
-  create({ telegramUserId, email, creditsUsed = 1 }) {
+  create({ telegramUserId, email, password, totpSecret, creditsUsed = 1 }) {
     const result = getDb().prepare(
-      `INSERT INTO generations (telegram_user_id, email, credits_used, status)
-       VALUES (?, ?, ?, 'pending')`
-    ).run(telegramUserId, email, creditsUsed);
+      `INSERT INTO generations (telegram_user_id, email, password, totp_secret, credits_used, status)
+       VALUES (?, ?, ?, ?, ?, 'pending')`
+    ).run(telegramUserId, email, password || null, totpSecret || null, creditsUsed);
     return result.lastInsertRowid;
   },
 

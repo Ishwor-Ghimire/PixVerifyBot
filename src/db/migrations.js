@@ -69,6 +69,15 @@ function runMigrations(db) {
     }
   }
 
+  // Migration: add password & totp_secret columns to generations (for storing on success)
+  const genCols = db.prepare("PRAGMA table_info(generations)").all().map(c => c.name);
+  if (!genCols.includes('password')) {
+    db.exec('ALTER TABLE generations ADD COLUMN password TEXT');
+  }
+  if (!genCols.includes('totp_secret')) {
+    db.exec('ALTER TABLE generations ADD COLUMN totp_secret TEXT');
+  }
+
   logger.info('Database migrations completed');
 }
 

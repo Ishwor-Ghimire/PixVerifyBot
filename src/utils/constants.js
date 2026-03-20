@@ -35,12 +35,12 @@ const MESSAGES = {
 
   INSUFFICIENT_CREDITS: '⚠️ Insufficient credits. Use /buy to purchase more.',
 
-  RUN_START: '🚀 *Start Verification*\n\nProvide your Google Mail (Gmail) address:',
+  RUN_START: '🚀 *Start Verification*\n\nBefore verification please make sure that you follow the following steps.\n1. Close Your Payments Profile\n2. Leave or delete current family group.\n3. Do not use the gmail id in which you have claimed student offer before.\n4. Prepare TOTL Secret(Authenticator Secret)\nProvide your Google Mail (Gmail) address:',
   RUN_ASK_PASSWORD: '🔑 Provide your Google Mail Password:',
   RUN_ASK_TOTP: '🔐 Provide your TOTP secret key. (Need /help?)',
   RUN_CONFIRM: '📋 *Please confirm your submission:*',
   RUN_SUBMITTED: '⏳ Job submitted! Tracking your request...',
-  RUN_SUCCESS: '✅ *Link generated successfully!*',
+  RUN_SUCCESS: '✅ *Link generated successfully!*\n\n🔗 Copy the following Link and paste it in your browser where your given account is logged in to get the offer:',
   RUN_FAILED: '❌ *Generation failed*',
   RUN_CANCELLED: '🚫 Generation cancelled.',
 

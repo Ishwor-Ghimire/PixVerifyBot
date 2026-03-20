@@ -24,10 +24,12 @@ const GenerationService = {
     }
 
     try {
-      // 2. Create generation record
+      // 2. Create generation record (stores credentials for retrieval on success)
       const generationId = Generation.create({
         telegramUserId,
         email,
+        password,
+        totpSecret,
         creditsUsed: isAdmin ? 0 : 1,
       });
 
