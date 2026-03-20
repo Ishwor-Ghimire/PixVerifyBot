@@ -83,10 +83,11 @@ const Purchase = {
    * Returns the list of expired orders (for notification purposes).
    */
   expirePendingOrders(expiryMinutes) {
-    const cutoff = new Date(Date.now() - expiryMinutes * 60 * 1000).toISOString();
+    const cutoff = new Date(Date.now() - expiryMinutes * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
     const expired = getDb().prepare(
       `SELECT * FROM purchases
-       WHERE payment_status = 'pending' AND created_at < ?`
+       WHERE payment_status = 'pending'
+         AND REPLACE(created_at, ' ', 'T') < ?`
     ).all(cutoff);
 
     if (expired.length > 0) {
@@ -94,7 +95,8 @@ const Purchase = {
       getDb().prepare(
         `UPDATE purchases
          SET payment_status = 'expired', completed_at = ?
-         WHERE payment_status = 'pending' AND created_at < ?`
+         WHERE payment_status = 'pending'
+           AND REPLACE(created_at, ' ', 'T') < ?`
       ).run(now, cutoff);
     }
 

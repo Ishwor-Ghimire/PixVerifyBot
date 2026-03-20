@@ -125,7 +125,10 @@ const PaymentMonitor = {
       return;
     }
 
-    const orderTimestamp = Math.floor(new Date(purchase.created_at).getTime() / 1000) - 60;
+    // Normalize old-format timestamps: datetime('now') stores 'YYYY-MM-DD HH:MM:SS' (UTC but no Z)
+    // new Date() treats strings without Z as local time, so append Z if missing
+    const createdAtUtc = purchase.created_at.endsWith('Z') ? purchase.created_at : purchase.created_at.replace(' ', 'T') + 'Z';
+    const orderTimestamp = Math.floor(new Date(createdAtUtc).getTime() / 1000) - 60;
     if (!Number.isFinite(orderTimestamp)) {
       logger.warn('BEP-20 order has invalid created_at timestamp', { purchaseId: purchase.id });
       return;
@@ -151,7 +154,9 @@ const PaymentMonitor = {
     const expectedAmount = parseFloat(purchase.unique_amount);
     if (!expectedAmount) return;
 
-    const orderTimestamp = Math.floor(new Date(purchase.created_at).getTime() / 1000) - 60;
+    // Normalize old-format timestamps (see checkUsdtPayment)
+    const createdAtUtc = purchase.created_at.endsWith('Z') ? purchase.created_at : purchase.created_at.replace(' ', 'T') + 'Z';
+    const orderTimestamp = Math.floor(new Date(createdAtUtc).getTime() / 1000) - 60;
     if (!Number.isFinite(orderTimestamp)) {
       logger.warn('TRC-20 order has invalid created_at timestamp', {
         purchaseId: purchase.id,

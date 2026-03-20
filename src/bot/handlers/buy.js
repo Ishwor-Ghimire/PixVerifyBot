@@ -260,7 +260,8 @@ async function handleBep20IvePaid(bot, chatId, userId, orderId, messageId) {
   await bot.sendMessage(chatId, '⏳ Scanning the blockchain for your payment...');
 
   const expectedAmount = parseFloat(purchase.unique_amount);
-  const orderTimestamp = Math.floor(new Date(purchase.created_at).getTime() / 1000) - 60;
+  const createdAtUtc = purchase.created_at.endsWith('Z') ? purchase.created_at : purchase.created_at.replace(' ', 'T') + 'Z';
+  const orderTimestamp = Math.floor(new Date(createdAtUtc).getTime() / 1000) - 60;
 
   // Pass used hashes so the matcher skips them and finds the next valid transfer
   const usedHashes = Purchase.getUsedPaymentReferences();
