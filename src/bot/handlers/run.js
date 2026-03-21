@@ -190,7 +190,7 @@ async function handleConfirm(bot, query) {
           const pos = status.queue_position ?? '...';
           const wait = status.estimated_wait_seconds ?? '...';
           progressMsg = [
-            `⏳ *Queued...*`,
+            `⏳ Queued...`,
             '',
             `📧 ${maskString(session.email)}`,
             `📊 Position: #${pos}`,
@@ -200,7 +200,7 @@ async function handleConfirm(bot, query) {
           const bar = generateProgressBar(status.stage, status.total_stages);
           const localElapsed = (Date.now() - localStartTime) / 1000;
           progressMsg = [
-            `⚙️ *Processing...*`,
+            `⚙️ Processing...`,
             '',
             `📧 ${maskString(session.email)}`,
             `${bar}`,
@@ -216,9 +216,10 @@ async function handleConfirm(bot, query) {
             await bot.editMessageText(progressMsg, {
               chat_id: chatId,
               message_id: statusMsg.message_id,
-              parse_mode: 'Markdown',
             });
-          } catch {}
+          } catch (editErr) {
+            logger.warn('Progress update failed', { error: editErr.message });
+          }
         }
       },
       isAdmin
