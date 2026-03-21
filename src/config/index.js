@@ -60,11 +60,13 @@ const BINANCE_API_KEY = optional('BINANCE_API_KEY', '').trim();
 const BINANCE_API_SECRET = optional('BINANCE_API_SECRET', '').trim();
 const COMMUNITY_LINK = optional('COMMUNITY_LINK', 'https://t.me/your_community').trim();
 const REQUIRED_CHANNEL = normalizeTelegramChatRef(optional('REQUIRED_CHANNEL', '') || COMMUNITY_LINK);
+const REQUIRED_CHANNEL_2 = normalizeTelegramChatRef(optional('REQUIRED_CHANNEL_2', ''));
 
 const config = Object.freeze({
   bot: {
     token: required('TELEGRAM_BOT_TOKEN'),
     requiredChannel: REQUIRED_CHANNEL,
+    requiredChannels: [REQUIRED_CHANNEL, REQUIRED_CHANNEL_2].filter(Boolean),
   },
 
   api: {
