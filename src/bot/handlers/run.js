@@ -249,9 +249,10 @@ async function handleConfirm(bot, query) {
         );
       } catch {}
     } else if (result.error === 'ALREADY_QUEUED') {
+      const refundNote = isAdmin ? '' : '\n\n💰 Your credit has been refunded.';
       try {
         await bot.editMessageText(
-          '⏳ This email is already being processed. Please wait.',
+          `⏳ This email is already being processed. Please wait.${refundNote}`,
           { chat_id: chatId, message_id: statusMsg.message_id }
         );
       } catch {}
