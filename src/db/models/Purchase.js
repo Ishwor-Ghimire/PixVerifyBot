@@ -34,10 +34,14 @@ const Purchase = {
       getDb().prepare('SELECT 1 FROM purchases WHERE id = ?').get(orderId) && attempts < 10
     );
 
+    // Explicitly set ISO 8601 timestamp — the table DEFAULT may still be datetime('now')
+    // which produces 'YYYY-MM-DD HH:MM:SS' (no T/Z) on databases created before the migration fix.
+    const createdAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+
     getDb().prepare(
-      `INSERT INTO purchases (id, telegram_user_id, amount, credits_added, payment_provider, payment_status, payment_method, unique_amount, checkout_url, payment_reference)
-       VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`
-    ).run(orderId, telegramUserId, amount, creditsAdded, paymentProvider, paymentMethod, uniqueAmount, checkoutUrl, paymentReference);
+      `INSERT INTO purchases (id, telegram_user_id, amount, credits_added, payment_provider, payment_status, payment_method, unique_amount, checkout_url, payment_reference, created_at)
+       VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`
+    ).run(orderId, telegramUserId, amount, creditsAdded, paymentProvider, paymentMethod, uniqueAmount, checkoutUrl, paymentReference, createdAt);
     return orderId;
   },
 
@@ -81,22 +85,33 @@ const Purchase = {
   /**
    * Expire pending orders older than the given number of minutes.
    * Returns the list of expired orders (for notification purposes).
+   *
+   * Handles both timestamp formats:
+   *   - Old: 'YYYY-MM-DD HH:MM:SS' (from datetime('now') DEFAULT)
+   *   - New: 'YYYY-MM-DDTHH:MM:SSZ' (ISO 8601)
+   * We normalize DB timestamps in SQL using REPLACE + || 'Z' to ensure
+   * consistent string comparison against the ISO cutoff.
    */
   expirePendingOrders(expiryMinutes) {
     const cutoff = new Date(Date.now() - expiryMinutes * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+    // Normalize: replace space with T, strip any existing Z, then append Z
+    // This ensures both 'YYYY-MM-DD HH:MM:SS' and 'YYYY-MM-DDTHH:MM:SSZ' become 'YYYY-MM-DDTHH:MM:SSZ'
+    const normalizeExpr = `REPLACE(REPLACE(created_at, ' ', 'T'), 'Z', '') || 'Z'`;
+
     const expired = getDb().prepare(
       `SELECT * FROM purchases
        WHERE payment_status = 'pending'
-         AND REPLACE(created_at, ' ', 'T') < ?`
+         AND ${normalizeExpr} < ?`
     ).all(cutoff);
 
     if (expired.length > 0) {
-      const now = new Date().toISOString();
+      const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
       getDb().prepare(
         `UPDATE purchases
          SET payment_status = 'expired', completed_at = ?
          WHERE payment_status = 'pending'
-           AND REPLACE(created_at, ' ', 'T') < ?`
+           AND ${normalizeExpr} < ?`
       ).run(now, cutoff);
     }
 
