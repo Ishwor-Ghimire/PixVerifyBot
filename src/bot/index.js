@@ -185,6 +185,20 @@ function createBot() {
     }
   });
 
+  // Register slash commands with Telegram so they appear in the command menu
+  bot.setMyCommands([
+    { command: 'start', description: 'Welcome & main menu' },
+    { command: 'run', description: 'Start verification' },
+    { command: 'balance', description: 'Check your credits' },
+    { command: 'buy', description: 'Purchase credits' },
+    { command: 'myhistory', description: 'View past generations' },
+    { command: 'queue', description: 'Check queue status' },
+    { command: 'community', description: 'Join our community' },
+    { command: 'support', description: 'Get help' },
+    { command: 'menu', description: 'Main menu' },
+    { command: 'help', description: 'How to use the bot' },
+  ]).catch(err => logger.warn('Failed to set bot commands', { error: err.message }));
+
   logger.info('Bot initialized and polling');
   return bot;
 }
