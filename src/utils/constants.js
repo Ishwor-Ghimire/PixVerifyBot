@@ -5,7 +5,7 @@ const MESSAGES = {
     '',
     'This bot helps you verify your Google Pixel device in your Google Account, allowing you to claim a free 1-year Google AI.',
     '',
-    'Before verification please make sure that you follow the following steps.\n1. Close Your Payments Profile\n2. Leave or delete current family group.\n3. Do not use the gmail id in which you have claimed student offer before.\n4. Prepare TOTL Secret(Authenticator Secret)\n\n',
+    'Before verification please make sure that you follow the following steps.\n1. Close Your Payments Profile\n2. Leave or delete current family group.\n3. Do not use the gmail id in which you have claimed student offer before.\n4. Prepare TOTL Secret(Authenticator Secret)\n',
     '',
     'Use /help if you cannot find TOTP secret key or contact @PixVerify',
   ].join('\n'),
