@@ -79,7 +79,7 @@ const GenerationService = {
             stage_label: '',
             isBackground: false,
           });
-        } catch {}
+        } catch { }
       }
 
       // 4. Poll for result (setInterval-based with background fallback)
@@ -93,7 +93,7 @@ const GenerationService = {
         }
         // Forward all progress to caller (queue pos, stage, progress bar data)
         if (onProgress) {
-          try { await onProgress(status); } catch {}
+          try { await onProgress(status); } catch { }
         }
       });
 

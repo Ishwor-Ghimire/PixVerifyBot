@@ -3,12 +3,16 @@ const logger = require('./src/utils/logger');
 const { initDatabase, closeDatabase } = require('./src/db/database');
 const { createBot } = require('./src/bot');
 const PaymentMonitor = require('./src/services/payments/paymentMonitor');
+const GenerationService = require('./src/services/generationService');
 
 async function main() {
   logger.info('Starting PixVerifyBot...');
 
   // Initialize database
   initDatabase();
+
+  // Reconcile any in-flight generations left over from a previous crash/restart
+  GenerationService.reconcileStaleGenerations();
 
   // Create and start bot
   const bot = createBot();

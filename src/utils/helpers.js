@@ -1,8 +1,8 @@
 /**
- * Validate email format (basic check)
+ * Validate email format — only personal Gmail is supported by the API
  */
 function isValidEmail(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 320;
+  return /^[^\s@]+@gmail\.com$/i.test(email) && email.length <= 320;
 }
 
 /**

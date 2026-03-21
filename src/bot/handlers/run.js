@@ -323,6 +323,16 @@ function getReadableError(code) {
     HTTP_402: '💳 API balance insufficient. Contact admin.',
     HTTP_409: '⏳ This email is already being processed.',
     HTTP_429: '⏱️ Too many requests. Please wait and try again.',
+    // Additional documented API errors
+    SSO_BLOCKED: '🔒 Single sign-on (SSO) is blocking this account. Managed/Workspace accounts are not supported.',
+    SIGNIN_FAILED: '🔑 Sign-in failed. Please check your credentials and try again.',
+    URL_CAPTURE_FAILED: '🔗 Failed to capture the verification URL. Please try again.',
+    ACCOUNT_NOT_DETECTED: '📧 Account was not detected during sign-in. Please verify the email.',
+    BROWSER_LOGIN_FAILED: '🌐 Browser login failed. Please try again later.',
+    PHONE_VERIFICATION: '📱 Phone verification required. This is not supported.',
+    RECOVERY_EMAIL: '📧 Recovery email verification required. Not supported.',
+    UNUSUAL_ACTIVITY: '⚠️ Google flagged unusual activity. Try again later.',
+    PROCESS_RESTART: '🔄 The bot was restarted during processing. Please try again.',
   };
   return errors[code] || `⚠️ Error: ${code}`;
 }
