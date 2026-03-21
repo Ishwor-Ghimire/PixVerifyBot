@@ -2,6 +2,8 @@ const User = require('../../db/models/User');
 const Purchase = require('../../db/models/Purchase');
 const CreditService = require('../../services/creditService');
 const PaymentService = require('../../services/paymentService');
+const GoogleOneClient = require('../../api/googleOneClient');
+const MaintenanceService = require('../../services/maintenanceService');
 const { MESSAGES, CALLBACKS } = require('../../utils/constants');
 const { formatDate } = require('../../utils/helpers');
 const logger = require('../../utils/logger');
@@ -72,6 +74,33 @@ function register(bot) {
     if (!User.isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, MESSAGES.ADMIN_ONLY);
     await addCreditsManual(bot, msg.chat.id, msg.from.id, match[1], match[2]);
   });
+
+  // /addbalance <id> <amount> — alias for addcredits (matching Api_Pixel_Bot)
+  bot.onText(/\/addbalance(?:\s+(\d+)\s+(\d+(?:\.\d+)?))?/, async (msg, match) => {
+    if (!User.isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, MESSAGES.ADMIN_ONLY);
+    await addCreditsManual(bot, msg.chat.id, msg.from.id, match[1], match[2]);
+  });
+
+  // /apistatus — API server health + queue overview
+  bot.onText(/\/apistatus/, async (msg) => {
+    if (!User.isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, MESSAGES.ADMIN_ONLY);
+    await showApiStatus(bot, msg.chat.id);
+  });
+
+  // /apibalance — remaining API key credits
+  bot.onText(/\/apibalance/, async (msg) => {
+    if (!User.isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, MESSAGES.ADMIN_ONLY);
+    await showApiBalance(bot, msg.chat.id);
+  });
+
+  // /maintenance — toggle maintenance mode
+  bot.onText(/\/maintenance/, async (msg) => {
+    if (!User.isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, MESSAGES.ADMIN_ONLY);
+    const isNowEnabled = MaintenanceService.toggle();
+    const label = isNowEnabled ? '🔴 ON — New verifications are blocked' : '🟢 OFF — System is operational';
+    logger.info('Maintenance mode toggled', { enabled: isNowEnabled, by: msg.from.id });
+    await bot.sendMessage(msg.chat.id, `🔧 *Maintenance Mode:* ${label}`, { parse_mode: 'Markdown' });
+  });
 }
 
 // ==========================================
@@ -114,8 +143,12 @@ async function sendAdminDashboard(bot, chatId, messageId = null) {
             '`/orders` — List pending orders',
             '`/confirm <id>` — Confirm an order',
             '`/reject <id>` — Reject an order',
-            '`/addcredits <userId> <amount>` — Give credits direct',
-            '`/health` — Check external API health'
+            '`/addcredits <userId> <amount>` — Give credits',
+            '`/addbalance <userId> <amount>` — Alias for addcredits',
+            '`/apistatus` — API server health & devices',
+            '`/apibalance` — Check API key balance',
+            '`/maintenance` — Toggle maintenance mode',
+            '`/health` — Quick API health check'
           ].join('\n');
           await bot.editMessageText(helpText, {
             chat_id: query.message.chat.id,
@@ -361,6 +394,70 @@ async function addCreditsManual(bot, chatId, adminId, inputUserId, inputAmount) 
   try {
     await bot.sendMessage(userId, `💰 *${amount} credits* have been added to your account by an admin.\nNew balance: *${newBalance}*`, { parse_mode: 'Markdown' });
   } catch {}
+}
+
+// ==========================================
+// API MANAGEMENT COMMANDS
+// ==========================================
+
+async function showApiStatus(bot, chatId) {
+  try {
+    const [health, queue] = await Promise.all([
+      GoogleOneClient.checkHealth(),
+      GoogleOneClient.getQueue(),
+    ]);
+
+    if (!health.ok) {
+      return bot.sendMessage(chatId, `❌ API health check failed: ${health.error}`);
+    }
+
+    const deviceStatus = health.devices_connected === health.device_count ? '🟢' : '🟡';
+    const maintenanceLabel = MaintenanceService.isEnabled() ? '🔴 Maintenance ON' : '🟢 Operational';
+
+    const msg = [
+      '🖥️ *API Server Status*',
+      '',
+      `${deviceStatus} *Server:* ${(health.status || 'unknown').toUpperCase()}`,
+      `📱 *Devices:* ${health.devices_connected ?? '?'}/${health.device_count ?? '?'} ready`,
+      '',
+      '📋 *Queue:*',
+      `🔄 Running: ${queue.ok ? (queue.current_job_ids?.filter(j => j !== null).length ?? 0) : '?'}`,
+      `⏳ Pending: ${queue.ok ? (queue.pending_count ?? 0) : '?'}`,
+      `⚡ Ready: ${queue.ok ? `${queue.devices_ready ?? '?'}/${queue.device_count ?? '?'}` : '?'}`,
+      `⏱️ Est. per job: ~${queue.ok ? (queue.est_seconds_per_job ?? '?') : '?'}s`,
+      '',
+      `🔧 *Bot Mode:* ${maintenanceLabel}`,
+    ].join('\n');
+
+    await bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
+  } catch (e) {
+    logger.error('apistatus command failed', { error: e.message });
+    await bot.sendMessage(chatId, `❌ API connection error: ${e.message}`);
+  }
+}
+
+async function showApiBalance(bot, chatId) {
+  try {
+    const balance = await GoogleOneClient.getApiBalance();
+    if (!balance) {
+      return bot.sendMessage(chatId, '❌ Failed to fetch API balance.');
+    }
+
+    const msg = [
+      '💳 *API Key Balance*',
+      '',
+      `🔑 Key: \`${balance.key || 'N/A'}\``,
+      `📛 Name: ${balance.name || 'N/A'}`,
+      `💰 Remaining: *${balance.balance ?? 'N/A'}*`,
+      `📊 Total used: ${balance.total_used ?? 'N/A'}`,
+      `💵 Cost per job: ${balance.cost_per_job ?? 'N/A'}`,
+    ].join('\n');
+
+    await bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
+  } catch (e) {
+    logger.error('apibalance command failed', { error: e.message });
+    await bot.sendMessage(chatId, `❌ Error: ${e.message}`);
+  }
 }
 
 module.exports = { register };

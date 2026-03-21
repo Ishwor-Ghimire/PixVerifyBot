@@ -1,5 +1,6 @@
 const GenerationService = require('../../services/generationService');
 const CreditService = require('../../services/creditService');
+const MaintenanceService = require('../../services/maintenanceService');
 const config = require('../../config');
 const { MESSAGES, CALLBACKS } = require('../../utils/constants');
 const { isValidEmail, isValidTotpSecret, maskString, formatDuration, generateProgressBar } = require('../../utils/helpers');
@@ -35,6 +36,11 @@ function register(bot) {
 
     // Admin check
     const isAdmin = config.admin.userIds.includes(userId);
+
+    // Maintenance mode blocks non-admin users
+    if (MaintenanceService.isEnabled() && !isAdmin) {
+      return bot.sendMessage(chatId, MESSAGES.MAINTENANCE);
+    }
 
     // Check balance (skip for admin)
     if (!isAdmin) {
