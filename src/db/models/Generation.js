@@ -50,6 +50,16 @@ const Generation = {
     return row.count > 0;
   },
 
+  /**
+   * Get all stale (non-terminal) generation rows.
+   * Used on startup to reconcile generations interrupted by a crash.
+   */
+  getStale() {
+    return getDb().prepare(
+      `SELECT * FROM generations WHERE status IN ('pending', 'queued', 'running')`
+    ).all();
+  },
+
   getById(id) {
     return getDb().prepare('SELECT * FROM generations WHERE id = ?').get(id);
   },

@@ -23,9 +23,12 @@ const GenerationService = {
       }
     }
 
+    // Track generation ID outside try so catch can mark it failed
+    let generationId = null;
+
     try {
       // 2. Create generation record (stores credentials for retrieval on success)
-      const generationId = Generation.create({
+      generationId = Generation.create({
         telegramUserId,
         email,
         password,
@@ -130,8 +133,20 @@ const GenerationService = {
         };
       }
     } catch (err) {
-      // Unexpected error — refund and mark failed
-      logger.error('Generation unexpected error', { error: err.message });
+      // Unexpected error — mark generation row as failed so user doesn't get locked out
+      logger.error('Generation unexpected error', { generationId, error: err.message });
+
+      if (generationId) {
+        try {
+          Generation.updateStatus(generationId, {
+            status: 'failed',
+            errorCode: 'INTERNAL_ERROR',
+          });
+        } catch (dbErr) {
+          logger.error('Failed to mark generation as failed', { generationId, error: dbErr.message });
+        }
+      }
+
       if (!isAdmin) {
         CreditService.refundCredits(telegramUserId, 1);
       }
@@ -140,6 +155,37 @@ const GenerationService = {
         error: 'INTERNAL_ERROR',
         message: err.message,
       };
+    }
+  },
+
+  /**
+   * Reconcile stale generations on startup.
+   * Marks any pending/queued/running rows as failed and refunds credits.
+   * Called once at boot to recover from crashes.
+   */
+  reconcileStaleGenerations() {
+    const stale = Generation.getStale();
+    if (stale.length === 0) return;
+
+    logger.warn(`Reconciling ${stale.length} stale generation(s) from previous run`);
+
+    for (const gen of stale) {
+      try {
+        Generation.updateStatus(gen.id, {
+          status: 'failed',
+          errorCode: 'PROCESS_RESTART',
+        });
+        if (gen.credits_used > 0) {
+          CreditService.refundCredits(gen.telegram_user_id, gen.credits_used);
+          logger.info('Refunded stale generation', {
+            generationId: gen.id,
+            userId: gen.telegram_user_id,
+            credits: gen.credits_used,
+          });
+        }
+      } catch (err) {
+        logger.error('Failed to reconcile generation', { id: gen.id, error: err.message });
+      }
     }
   },
 
