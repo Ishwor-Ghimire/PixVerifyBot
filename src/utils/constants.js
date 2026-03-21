@@ -5,7 +5,7 @@ const MESSAGES = {
     '',
     'This bot helps you verify your Google Pixel device in your Google Account, allowing you to claim a free 1-year Google AI.',
     '',
-    'Before verification make sure you have your Google Mail (Gmail) address, Password and TOTP secret key ready.',
+    'Before verification please make sure that you follow the following steps.\n1. Close Your Payments Profile\n2. Leave or delete current family group.\n3. Do not use the gmail id in which you have claimed student offer before.\n4. Prepare TOTL Secret(Authenticator Secret)\n\n',
     '',
     'Use /help if you cannot find TOTP secret key or contact @PixVerify',
   ].join('\n'),
@@ -35,7 +35,7 @@ const MESSAGES = {
 
   INSUFFICIENT_CREDITS: '⚠️ Insufficient credits. Use /buy to purchase more.',
 
-  RUN_START: '🚀 *Start Verification*\n\nBefore verification please make sure that you follow the following steps.\n1. Close Your Payments Profile\n2. Leave or delete current family group.\n3. Do not use the gmail id in which you have claimed student offer before.\n4. Prepare TOTL Secret(Authenticator Secret)\n\n\n*Provide your Google Mail (Gmail) address:*',
+  RUN_START: '*✉️ Provide your Google Mail (Gmail) address:*',
   RUN_ASK_PASSWORD: '*🔑 Provide your Google Mail Password:*',
   RUN_ASK_TOTP: '*🔐 Provide your TOTP secret key. (Need /help?)*',
   RUN_CONFIRM: '📋 *Please confirm your submission:*',
