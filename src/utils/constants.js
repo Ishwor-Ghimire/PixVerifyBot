@@ -56,7 +56,7 @@ const MESSAGES = {
 
   HEALTH_HEADER: '🏥 *System Health*\n',
 
-  COMMUNITY: '🌐 *Join our community:*\n\n{link}',
+  COMMUNITY: '🌐 *Join our community:*\n\n{link}\n\n📢 *For more methods like this:*\nhttps://t.me/Azazelmethods',
   SUPPORT: '🛟 *Need help?*\n\nContact support: {contact}',
 
   MENU_HEADER: '📱 *Main Menu*\n\nChoose an action:',
