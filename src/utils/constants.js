@@ -37,7 +37,7 @@ const MESSAGES = {
 
   RUN_START: '*✉️ Provide your Google Mail (Gmail) address:*',
   RUN_ASK_PASSWORD: '*🔑 Provide your Google Mail Password:*',
-  RUN_ASK_TOTP: '*🔐 Provide your TOTP secret key. (Need /help?)*',
+  RUN_ASK_TOTP: '*🔐 Provide your TOTP secret key. Remove all the spaces (Need /help?)*',
   RUN_CONFIRM: '📋 *Please confirm your submission:*',
   RUN_SUBMITTED: '⏳ Job submitted! Tracking your request...',
   RUN_SUCCESS: '✅ *Link generated successfully!*\n\n🔗 Copy the following Link and paste it in your browser where your given account is logged in to get the offer:',
