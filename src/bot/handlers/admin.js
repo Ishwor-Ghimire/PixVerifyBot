@@ -101,6 +101,18 @@ function register(bot) {
     logger.info('Maintenance mode toggled', { enabled: isNowEnabled, by: msg.from.id });
     await bot.sendMessage(msg.chat.id, `🔧 *Maintenance Mode:* ${label}`, { parse_mode: 'Markdown' });
   });
+
+  // /removecredits <id> <amount> — remove credits from a user
+  bot.onText(/\/removecredits(?:\s+(\d+)\s+(\d+(?:\.\d+)?))?/, async (msg, match) => {
+    if (!User.isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, MESSAGES.ADMIN_ONLY);
+    await removeCreditsManual(bot, msg.chat.id, msg.from.id, match[1], match[2]);
+  });
+
+  // /checkcredits <id> — check a user's credit balance
+  bot.onText(/\/checkcredits(?:\s+(\d+))?/, async (msg, match) => {
+    if (!User.isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, MESSAGES.ADMIN_ONLY);
+    await checkCredits(bot, msg.chat.id, match[1]);
+  });
 }
 
 // ==========================================
@@ -144,6 +156,8 @@ async function sendAdminDashboard(bot, chatId, messageId = null) {
             '`/confirm <id>` — Confirm an order',
             '`/reject <id>` — Reject an order',
             '`/addcredits <userId> <amount>` — Give credits',
+            '`/removecredits <userId> <amount>` — Remove credits',
+            '`/checkcredits <userId>` — Check user balance',
             '`/addbalance <userId> <amount>` — Alias for addcredits',
             '`/apistatus` — API server health & devices',
             '`/apibalance` — Check API key balance',
@@ -210,7 +224,9 @@ async function showPendingOrders(bot, chatId, messageId = null) {
 
   let text = '📋 *Pending Orders*\n\n';
   for (const p of pending) {
-    text += `*#${p.id}* — User ID: \`${p.telegram_user_id}\`\n`;
+    const user = User.findById(p.telegram_user_id);
+    const username = user?.username ? `@${user.username}` : 'N/A';
+    text += `*#${p.id}* — ${username} (\`${p.telegram_user_id}\`)\n`;
     text += `  💰 $${p.amount} → ${p.credits_added} credits\n`;
     text += `  📱 ${p.payment_method || p.payment_provider}\n`;
     if (p.unique_amount) text += `  🔢 Unique: $${p.unique_amount}\n`;
@@ -395,9 +411,65 @@ async function addCreditsManual(bot, chatId, adminId, inputUserId, inputAmount) 
     await bot.sendMessage(userId, `💰 *${amount} credits* have been added to your account by an admin.\nNew balance: *${newBalance}*`, { parse_mode: 'Markdown' });
   } catch {}
 }
-
 // ==========================================
-// API MANAGEMENT COMMANDS
+// CREDIT MANAGEMENT
+// ==========================================
+
+async function removeCreditsManual(bot, chatId, adminId, inputUserId, inputAmount) {
+  const userId = inputUserId ? parseInt(inputUserId, 10) : null;
+  const amount = inputAmount ? parseFloat(inputAmount) : null;
+
+  if (!userId || !amount || amount <= 0) {
+    return bot.sendMessage(chatId, '⚠️ Usage: `/removecredits <telegram_user_id> <amount>`', { parse_mode: 'Markdown' });
+  }
+
+  const user = User.findById(userId);
+  if (!user) return bot.sendMessage(chatId, `⚠️ User \`${userId}\` not found.`, { parse_mode: 'Markdown' });
+
+  const success = CreditService.removeCredits(userId, amount);
+  if (!success) {
+    const currentBalance = CreditService.getBalance(userId);
+    return bot.sendMessage(chatId, `⚠️ Cannot remove *${amount}* credits. User only has *${currentBalance}* credits.`, { parse_mode: 'Markdown' });
+  }
+
+  const newBalance = CreditService.getBalance(userId);
+  logger.info('Admin removed credits', { adminId, userId, amount, newBalance });
+
+  const username = user.username ? `@${user.username}` : `ID:${userId}`;
+  await bot.sendMessage(chatId, `✅ Removed *${amount}* credits from ${username}.\nNew balance: *${newBalance}*`, { parse_mode: 'Markdown' });
+
+  try {
+    await bot.sendMessage(userId, `💸 *${amount} credits* have been removed from your account by an admin.\nNew balance: *${newBalance}*`, { parse_mode: 'Markdown' });
+  } catch {}
+}
+
+async function checkCredits(bot, chatId, inputUserId) {
+  const userId = inputUserId ? parseInt(inputUserId, 10) : null;
+
+  if (!userId) {
+    return bot.sendMessage(chatId, '⚠️ Usage: `/checkcredits <telegram_user_id>`', { parse_mode: 'Markdown' });
+  }
+
+  const user = User.findById(userId);
+  if (!user) return bot.sendMessage(chatId, `⚠️ User \`${userId}\` not found.`, { parse_mode: 'Markdown' });
+
+  const balance = CreditService.getBalance(userId);
+  const username = user.username ? `@${user.username}` : 'N/A';
+  const firstName = user.first_name || 'N/A';
+
+  const msg = [
+    '👤 *User Credit Info*',
+    '',
+    `📛 Name: ${firstName}`,
+    `🔗 Username: ${username}`,
+    `🆔 ID: \`${userId}\``,
+    `💰 Credits: *${balance}*`,
+  ].join('\n');
+
+  await bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
+}
+
+
 // ==========================================
 
 async function showApiStatus(bot, chatId) {

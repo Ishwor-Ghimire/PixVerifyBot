@@ -45,6 +45,26 @@ const CreditService = {
     User.updateBalance(telegramUserId, amount);
     logger.info('Credits added', { telegramUserId, amount });
   },
+
+  /**
+   * Remove credits from a user (admin action).
+   * Returns true if successful, false if insufficient balance.
+   */
+  removeCredits(telegramUserId, amount) {
+    const db = getDb();
+    const txn = db.transaction(() => {
+      const user = User.findById(telegramUserId);
+      if (!user || user.credit_balance < amount) {
+        return false;
+      }
+      User.updateBalance(telegramUserId, -amount);
+      return true;
+    });
+
+    const result = txn();
+    logger.info('Credits removed', { telegramUserId, amount, success: result });
+    return result;
+  },
 };
 
 module.exports = CreditService;
