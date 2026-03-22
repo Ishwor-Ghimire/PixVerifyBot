@@ -18,6 +18,14 @@ function initDatabase() {
   const dbPath = path.resolve(config.db.path);
   const dbDir = path.dirname(dbPath);
 
+  // Warn if running on Railway without a volume-backed path
+  if (process.env.RAILWAY_ENVIRONMENT && !dbPath.startsWith('/data')) {
+    logger.warn(
+      'Running on Railway but DB_PATH does not point to a volume mount (/data). ' +
+      'Data will be LOST on every deploy! Set DB_PATH=/data/pixverify.db and attach a volume at /data.',
+    );
+  }
+
   if (!fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true });
   }
