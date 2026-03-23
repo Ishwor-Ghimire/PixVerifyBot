@@ -26,6 +26,7 @@ const MESSAGES = {
     '• /run — Start verification',
     '• /balance — Check your credits',
     '• /buy — Purchase credits',
+    '• /refer — Referral link & stats',
     '• /myhistory — View past generations',
     '• /queue — Check queue status',
     '• /community — Join our community',
@@ -69,6 +70,21 @@ const MESSAGES = {
   ALREADY_RUNNING: '⏳ You already have a generation in progress. Please wait for it to complete.',
   BACKGROUND_POLLING: '⏰ *Active polling timed out*\n\n🔄 The bot is still monitoring your job in the background.\nYou will be notified automatically when it completes.',
   MAINTENANCE: '🔧 *System Maintenance*\n\nThe bot is currently under maintenance. Please try again later.',
+
+  REFERRAL_STATS: [
+    '🔗 *Your Referral Link:*',
+    '`{link}`',
+    '',
+    '📊 *Referral Stats:*',
+    '• Total Referrals: *{total}*',
+    '• ✅ Successful: *{successful}*',
+    '• ⏳ Pending: *{pending}*',
+    '• 💰 Total Rewards: *{totalRewards} credits*',
+    '',
+    '_Share your link! You earn {rewardPerReferral} credits for each successful referral (new user who tops up ≥ {minTopUp} credit)._',
+  ].join('\n'),
+
+  REFERRAL_REWARD_NOTIFY: '🎉 *Referral Reward!*\n\nYour referral just topped up! You earned *{reward} credits*.\nYour new balance: *{balance} credits*',
 };
 
 // Generation status labels

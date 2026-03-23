@@ -1,8 +1,30 @@
 const { MESSAGES, CALLBACKS } = require('../../utils/constants');
+const User = require('../../db/models/User');
+const ReferralService = require('../../services/referralService');
+const logger = require('../../utils/logger');
 
 function register(bot) {
-  bot.onText(/\/start/, async (msg) => {
+  bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
     const chatId = msg.chat.id;
+    const payload = match[1]; // deep-link payload, e.g. "ref_12345"
+
+    // Register user
+    const user = User.findOrCreate(msg.from);
+
+    // Handle referral deep-link for NEW users only
+    if (payload && user.isNew) {
+      const referrerId = ReferralService.parseReferralCode(payload);
+      if (referrerId) {
+        const result = ReferralService.recordReferral(referrerId, msg.from.id);
+        if (result.success) {
+          logger.info('Referral recorded via deep-link', {
+            referrer: referrerId,
+            referred: msg.from.id,
+          });
+        }
+      }
+    }
+
     const keyboard = {
       inline_keyboard: [
         [
@@ -18,8 +40,11 @@ function register(bot) {
           { text: '🌐 Community', callback_data: `${CALLBACKS.MENU_ACTION}community` },
         ],
         [
-          { text: '🛟 Support', callback_data: `${CALLBACKS.MENU_ACTION}support` },
+          { text: '🔗 Refer & Earn', callback_data: `${CALLBACKS.MENU_ACTION}refer` },
           { text: '📖 Help', callback_data: `${CALLBACKS.MENU_ACTION}help` },
+        ],
+        [
+          { text: '🛟 Support', callback_data: `${CALLBACKS.MENU_ACTION}support` },
         ],
       ],
     };

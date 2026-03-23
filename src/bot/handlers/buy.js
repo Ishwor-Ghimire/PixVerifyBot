@@ -1,6 +1,7 @@
 const config = require('../../config');
 const PaymentService = require('../../services/paymentService');
 const UsdtBep20Service = require('../../services/payments/usdtBep20');
+const User = require('../../db/models/User');
 const { MESSAGES, CALLBACKS } = require('../../utils/constants');
 const logger = require('../../utils/logger');
 
@@ -298,6 +299,24 @@ async function handleBep20IvePaid(bot, chatId, userId, orderId, messageId) {
       '',
       'Use /run to generate a link or /balance to check your balance.',
     ].join('\n'), { parse_mode: 'Markdown' });
+
+    // Notify referrer if they earned a reward
+    if (confirmation.referrerRewarded) {
+      try {
+        const referrerBalance = User.getBalance(confirmation.referrerRewarded);
+        const rewardMsg = MESSAGES.REFERRAL_REWARD_NOTIFY
+          .replace('{reward}', config.referral.rewardCredits)
+          .replace('{balance}', referrerBalance);
+        await bot.sendMessage(confirmation.referrerRewarded, rewardMsg, {
+          parse_mode: 'Markdown',
+        });
+      } catch (err) {
+        logger.warn('Could not notify referrer of reward', {
+          referrerId: confirmation.referrerRewarded,
+          error: err.message,
+        });
+      }
+    }
 
     logger.info('BEP-20 payment confirmed via I\'ve Paid scan', {
       orderId,

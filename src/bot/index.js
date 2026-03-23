@@ -4,6 +4,10 @@ const logger = require('../utils/logger');
 const User = require('../db/models/User');
 const { CALLBACKS } = require('../utils/constants');
 
+// Store referral payloads so they survive the channel-gating replay
+// Key: telegram user ID, Value: referral payload string
+const pendingReferralPayloads = new Map();
+
 // Import handlers
 const startHandler = require('./handlers/start');
 const runHandler = require('./handlers/run');
@@ -16,6 +20,7 @@ const queueHandler = require('./handlers/queue');
 const supportHandler = require('./handlers/support');
 const menuHandler = require('./handlers/menu');
 const helpHandler = require('./handlers/help');
+const referHandler = require('./handlers/refer');
 const adminHandler = require('./handlers/admin');
 
 function createBot() {
@@ -86,6 +91,13 @@ function createBot() {
             }
 
             if (unjoinedChannels.length > 0) {
+              // Save referral payload before blocking, so it survives the gating flow
+              const msgText = update.message?.text || '';
+              const refMatch = msgText.match(/^\/start\s+(ref_\d+)/);
+              if (refMatch) {
+                pendingReferralPayloads.set(userId, refMatch[1]);
+              }
+
               await promptChannelJoin(
                 update,
                 update.callback_query?.data === 'check_sub'
@@ -127,9 +139,13 @@ function createBot() {
   });
 
   // Auto-register users on any message
+  // IMPORTANT: Skip /start with referral payload — the start handler needs
+  // to see isNew=true before auto-registration creates the user.
   bot.on('message', (msg) => {
     if (msg.from) {
       try {
+        // If this is /start with a referral code, let start.js handle registration
+        if (msg.text && /^\/start\s+ref_\d+/.test(msg.text)) return;
         User.findOrCreate(msg.from);
       } catch (err) {
         logger.error('User registration error', { error: err.message });
@@ -149,6 +165,7 @@ function createBot() {
   supportHandler.register(bot);
   menuHandler.register(bot);
   helpHandler.register(bot);
+  referHandler.register(bot);
   adminHandler.register(bot);
 
   // Handle menu callback routing
@@ -157,8 +174,13 @@ function createBot() {
       await bot.answerCallbackQuery(query.id, { text: '✅ Verified! Welcome.' });
       try { await bot.deleteMessage(query.message.chat.id, query.message.message_id); } catch {}
       
-      const fakeMsg = { chat: query.message.chat, from: query.from, message_id: query.message.message_id, text: '/start' };
-      bot.processUpdate({ message: { ...fakeMsg, text: '/start', date: Date.now() } });
+      // Restore the referral payload if one was saved before channel gating
+      const savedPayload = pendingReferralPayloads.get(query.from.id);
+      const startText = savedPayload ? `/start ${savedPayload}` : '/start';
+      pendingReferralPayloads.delete(query.from.id);
+
+      const fakeMsg = { chat: query.message.chat, from: query.from, message_id: query.message.message_id, text: startText };
+      bot.processUpdate({ message: { ...fakeMsg, text: startText, date: Date.now() } });
       return;
     }
 
@@ -201,6 +223,9 @@ function createBot() {
       case 'help':
         bot.processUpdate({ message: { ...fakeMsg, text: '/help', date: Date.now() } });
         break;
+      case 'refer':
+        bot.processUpdate({ message: { ...fakeMsg, text: '/refer', date: Date.now() } });
+        break;
     }
   });
 
@@ -215,6 +240,7 @@ function createBot() {
     { command: 'community', description: 'Join our community' },
     { command: 'support', description: 'Get help' },
     { command: 'menu', description: 'Main menu' },
+    { command: 'refer', description: 'Referral link & stats' },
     { command: 'help', description: 'How to use the bot' },
   ]).catch(err => logger.warn('Failed to set bot commands', { error: err.message }));
 

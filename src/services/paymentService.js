@@ -1,6 +1,7 @@
 const Purchase = require('../db/models/Purchase');
 const UsdtBep20Service = require('./payments/usdtBep20');
 const BinanceApiClient = require('./payments/binancePay');
+const ReferralService = require('./referralService');
 const config = require('../config');
 const { getDb } = require('../db/database');
 const User = require('../db/models/User');
@@ -207,6 +208,12 @@ const PaymentService = {
 
     if (result.success) {
       logger.info('Payment confirmed', { orderId, credits: result.credits });
+
+      // Check and reward referral if applicable
+      const referrerRewarded = ReferralService.checkAndRewardReferral(result.telegramUserId);
+      if (referrerRewarded) {
+        result.referrerRewarded = referrerRewarded;
+      }
     }
 
     return result;

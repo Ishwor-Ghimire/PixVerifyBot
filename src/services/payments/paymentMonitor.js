@@ -2,8 +2,10 @@ const Purchase = require('../../db/models/Purchase');
 const UsdtBep20Service = require('./usdtBep20');
 const UsdtTrc20Service = require('./usdtTrc20');
 const PaymentService = require('../paymentService');
+const User = require('../../db/models/User');
 const config = require('../../config');
 const logger = require('../../utils/logger');
+const { MESSAGES } = require('../../utils/constants');
 
 let monitorInterval = null;
 let botInstance = null;
@@ -207,6 +209,24 @@ const PaymentMonitor = {
           userId: purchase.telegram_user_id,
           error: err.message,
         });
+      }
+
+      // Notify referrer if they earned a reward
+      if (result.referrerRewarded) {
+        try {
+          const referrerBalance = User.getBalance(result.referrerRewarded);
+          const rewardMsg = MESSAGES.REFERRAL_REWARD_NOTIFY
+            .replace('{reward}', config.referral.rewardCredits)
+            .replace('{balance}', referrerBalance);
+          await botInstance.sendMessage(result.referrerRewarded, rewardMsg, {
+            parse_mode: 'Markdown',
+          });
+        } catch (err) {
+          logger.warn('Could not notify referrer of reward', {
+            referrerId: result.referrerRewarded,
+            error: err.message,
+          });
+        }
       }
     }
 

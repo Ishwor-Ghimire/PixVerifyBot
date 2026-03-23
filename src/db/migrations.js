@@ -78,6 +78,29 @@ function runMigrations(db) {
     db.exec('ALTER TABLE generations ADD COLUMN totp_secret TEXT');
   }
 
+  // Migration: referrals table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS referrals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      referrer_user_id INTEGER NOT NULL,
+      referred_user_id INTEGER NOT NULL UNIQUE,
+      status TEXT DEFAULT 'pending',
+      reward_credited INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      completed_at TEXT,
+      FOREIGN KEY (referrer_user_id) REFERENCES users(telegram_user_id),
+      FOREIGN KEY (referred_user_id) REFERENCES users(telegram_user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_user_id);
+    CREATE INDEX IF NOT EXISTS idx_referrals_referred ON referrals(referred_user_id);
+  `);
+
+  // Migration: add referred_by column to users
+  const userCols = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
+  if (!userCols.includes('referred_by')) {
+    db.exec('ALTER TABLE users ADD COLUMN referred_by INTEGER');
+  }
+
   logger.info('Database migrations completed');
 }
 
