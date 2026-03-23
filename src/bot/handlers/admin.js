@@ -6,6 +6,7 @@ const GoogleOneClient = require('../../api/googleOneClient');
 const MaintenanceService = require('../../services/maintenanceService');
 const { MESSAGES, CALLBACKS } = require('../../utils/constants');
 const { formatDate } = require('../../utils/helpers');
+const config = require('../../config');
 const logger = require('../../utils/logger');
 
 // Pending admin confirmations
@@ -48,6 +49,14 @@ function register(bot) {
         await handleAdminConfirm(bot, query);
       } else if (data.startsWith(CALLBACKS.ADMIN_REJECT)) {
         await handleAdminReject(bot, query);
+      } else if (data.startsWith('adm_addcr_yes_')) {
+        await executeAddCredits(bot, query);
+      } else if (data.startsWith('adm_addcr_no_')) {
+        await cancelCreditAction(bot, query, 'adm_addcr_no_');
+      } else if (data.startsWith('adm_rmcr_yes_')) {
+        await executeRemoveCredits(bot, query);
+      } else if (data.startsWith('adm_rmcr_no_')) {
+        await cancelCreditAction(bot, query, 'adm_rmcr_no_');
       }
     }
   });
@@ -349,6 +358,19 @@ async function handleAdminConfirm(bot, query) {
       'Use /run to start verification or /balance to check your balance.',
     ].join('\n'), { parse_mode: 'Markdown' });
   } catch {}
+
+  // Notify referrer if they earned a reward
+  if (confirmation.referrerRewarded) {
+    try {
+      const referrerBalance = User.getBalance(confirmation.referrerRewarded);
+      const rewardMsg = MESSAGES.REFERRAL_REWARD_NOTIFY
+        .replace('{reward}', config.referral.rewardCredits)
+        .replace('{balance}', referrerBalance);
+      await bot.sendMessage(confirmation.referrerRewarded, rewardMsg, {
+        parse_mode: 'Markdown',
+      });
+    } catch {}
+  }
 }
 
 async function handleAdminReject(bot, query) {
@@ -399,18 +421,62 @@ async function addCreditsManual(bot, chatId, adminId, inputUserId, inputAmount) 
   const user = User.findById(userId);
   if (!user) return bot.sendMessage(chatId, `⚠️ User \`${userId}\` not found.`, { parse_mode: 'Markdown' });
 
-  CreditService.addCredits(userId, amount);
-  const newBalance = CreditService.getBalance(userId);
-
-  logger.info('Admin added credits', { adminId, userId, amount, newBalance });
-
+  const currentBalance = CreditService.getBalance(userId);
   const username = user.username ? `@${user.username}` : `ID:${userId}`;
-  await bot.sendMessage(chatId, `✅ Added *${amount}* credits to ${username}.\nNew balance: *${newBalance}*`, { parse_mode: 'Markdown' });
+  const actionKey = `addcr_${adminId}_${userId}_${Date.now()}`;
+
+  pendingConfirmations.set(actionKey, { type: 'add', userId, amount, adminId });
+  setTimeout(() => pendingConfirmations.delete(actionKey), 2 * 60 * 1000);
+
+  await bot.sendMessage(chatId, [
+    '➕ *Add Credits — Confirm*',
+    '',
+    `👤 *User:* ${username} (ID: \`${userId}\`)`,
+    `💰 *Current balance:* ${currentBalance} credits`,
+    `➕ *Amount to add:* ${amount} credits`,
+    `📊 *New balance will be:* ${currentBalance + amount} credits`,
+    '',
+    '⚠️ *Proceed?*',
+  ].join('\n'), {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [[
+        { text: '✅ Yes, add credits', callback_data: `adm_addcr_yes_${actionKey}` },
+        { text: '❌ Cancel', callback_data: `adm_addcr_no_${actionKey}` },
+      ]],
+    },
+  });
+}
+
+async function executeAddCredits(bot, query) {
+  const actionKey = query.data.replace('adm_addcr_yes_', '');
+  const action = pendingConfirmations.get(actionKey);
+  if (!action) {
+    return bot.answerCallbackQuery(query.id, { text: 'This action has expired.' });
+  }
+  pendingConfirmations.delete(actionKey);
+
+  CreditService.addCredits(action.userId, action.amount);
+  const newBalance = CreditService.getBalance(action.userId);
+  const user = User.findById(action.userId);
+  const username = user?.username ? `@${user.username}` : `ID:${action.userId}`;
+
+  logger.info('Admin added credits', { adminId: action.adminId, userId: action.userId, amount: action.amount, newBalance });
+
+  await bot.answerCallbackQuery(query.id, { text: '✅ Credits added!' });
 
   try {
-    await bot.sendMessage(userId, `💰 *${amount} credits* have been added to your account by an admin.\nNew balance: *${newBalance}*`, { parse_mode: 'Markdown' });
+    await bot.editMessageText(
+      `✅ Added *${action.amount}* credits to ${username}.\nNew balance: *${newBalance}*`,
+      { chat_id: query.message.chat.id, message_id: query.message.message_id, parse_mode: 'Markdown' }
+    );
+  } catch {}
+
+  try {
+    await bot.sendMessage(action.userId, `💰 *${action.amount} credits* have been added to your account by an admin.\nNew balance: *${newBalance}*`, { parse_mode: 'Markdown' });
   } catch {}
 }
+
 // ==========================================
 // CREDIT MANAGEMENT
 // ==========================================
@@ -426,20 +492,87 @@ async function removeCreditsManual(bot, chatId, adminId, inputUserId, inputAmoun
   const user = User.findById(userId);
   if (!user) return bot.sendMessage(chatId, `⚠️ User \`${userId}\` not found.`, { parse_mode: 'Markdown' });
 
-  const success = CreditService.removeCredits(userId, amount);
-  if (!success) {
-    const currentBalance = CreditService.getBalance(userId);
+  const currentBalance = CreditService.getBalance(userId);
+  if (currentBalance < amount) {
     return bot.sendMessage(chatId, `⚠️ Cannot remove *${amount}* credits. User only has *${currentBalance}* credits.`, { parse_mode: 'Markdown' });
   }
 
-  const newBalance = CreditService.getBalance(userId);
-  logger.info('Admin removed credits', { adminId, userId, amount, newBalance });
-
   const username = user.username ? `@${user.username}` : `ID:${userId}`;
-  await bot.sendMessage(chatId, `✅ Removed *${amount}* credits from ${username}.\nNew balance: *${newBalance}*`, { parse_mode: 'Markdown' });
+  const actionKey = `rmcr_${adminId}_${userId}_${Date.now()}`;
+
+  pendingConfirmations.set(actionKey, { type: 'remove', userId, amount, adminId });
+  setTimeout(() => pendingConfirmations.delete(actionKey), 2 * 60 * 1000);
+
+  await bot.sendMessage(chatId, [
+    '➖ *Remove Credits — Confirm*',
+    '',
+    `👤 *User:* ${username} (ID: \`${userId}\`)`,
+    `💰 *Current balance:* ${currentBalance} credits`,
+    `➖ *Amount to remove:* ${amount} credits`,
+    `📊 *New balance will be:* ${currentBalance - amount} credits`,
+    '',
+    '⚠️ *Proceed?*',
+  ].join('\n'), {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [[
+        { text: '✅ Yes, remove credits', callback_data: `adm_rmcr_yes_${actionKey}` },
+        { text: '❌ Cancel', callback_data: `adm_rmcr_no_${actionKey}` },
+      ]],
+    },
+  });
+}
+
+async function executeRemoveCredits(bot, query) {
+  const actionKey = query.data.replace('adm_rmcr_yes_', '');
+  const action = pendingConfirmations.get(actionKey);
+  if (!action) {
+    return bot.answerCallbackQuery(query.id, { text: 'This action has expired.' });
+  }
+  pendingConfirmations.delete(actionKey);
+
+  const success = CreditService.removeCredits(action.userId, action.amount);
+  if (!success) {
+    const currentBalance = CreditService.getBalance(action.userId);
+    await bot.answerCallbackQuery(query.id, { text: 'Insufficient balance!' });
+    try {
+      await bot.editMessageText(
+        `⚠️ Cannot remove *${action.amount}* credits. User only has *${currentBalance}* credits.`,
+        { chat_id: query.message.chat.id, message_id: query.message.message_id, parse_mode: 'Markdown' }
+      );
+    } catch {}
+    return;
+  }
+
+  const newBalance = CreditService.getBalance(action.userId);
+  const user = User.findById(action.userId);
+  const username = user?.username ? `@${user.username}` : `ID:${action.userId}`;
+
+  logger.info('Admin removed credits', { adminId: action.adminId, userId: action.userId, amount: action.amount, newBalance });
+
+  await bot.answerCallbackQuery(query.id, { text: '✅ Credits removed!' });
 
   try {
-    await bot.sendMessage(userId, `💸 *${amount} credits* have been removed from your account by an admin.\nNew balance: *${newBalance}*`, { parse_mode: 'Markdown' });
+    await bot.editMessageText(
+      `✅ Removed *${action.amount}* credits from ${username}.\nNew balance: *${newBalance}*`,
+      { chat_id: query.message.chat.id, message_id: query.message.message_id, parse_mode: 'Markdown' }
+    );
+  } catch {}
+
+  try {
+    await bot.sendMessage(action.userId, `💸 *${action.amount} credits* have been removed from your account by an admin.\nNew balance: *${newBalance}*`, { parse_mode: 'Markdown' });
+  } catch {}
+}
+
+async function cancelCreditAction(bot, query, prefix) {
+  const actionKey = query.data.replace(prefix, '');
+  pendingConfirmations.delete(actionKey);
+  await bot.answerCallbackQuery(query.id, { text: 'Cancelled' });
+  try {
+    await bot.editMessageText('🚫 Action cancelled.', {
+      chat_id: query.message.chat.id,
+      message_id: query.message.message_id,
+    });
   } catch {}
 }
 
