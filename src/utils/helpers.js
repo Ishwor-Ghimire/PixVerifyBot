@@ -51,6 +51,15 @@ function escapeMarkdown(text) {
 }
 
 /**
+ * Escape Telegram Markdown v1 special characters (_*`[)
+ * Use this when sending messages with parse_mode: 'Markdown' (v1)
+ */
+function escapeMarkdownV1(text) {
+  if (!text) return '';
+  return String(text).replace(/[_*`[\]]/g, '\\$&');
+}
+
+/**
  * Format seconds to human-readable duration
  */
 function formatDuration(seconds) {
@@ -78,6 +87,7 @@ module.exports = {
   formatDate,
   maskString,
   escapeMarkdown,
+  escapeMarkdownV1,
   formatDuration,
   generateProgressBar,
 };

@@ -5,7 +5,7 @@ const PaymentService = require('../../services/paymentService');
 const GoogleOneClient = require('../../api/googleOneClient');
 const MaintenanceService = require('../../services/maintenanceService');
 const { MESSAGES, CALLBACKS } = require('../../utils/constants');
-const { formatDate } = require('../../utils/helpers');
+const { formatDate, escapeMarkdownV1 } = require('../../utils/helpers');
 const config = require('../../config');
 const logger = require('../../utils/logger');
 
@@ -45,6 +45,9 @@ function register(bot) {
       } else if (data === 'adm_orders_list') {
         await bot.answerCallbackQuery(query.id);
         await showPendingOrders(bot, message.chat.id, message.message_id);
+      } else if (data === 'adm_help') {
+        await bot.answerCallbackQuery(query.id);
+        await showAdminHelp(bot, message.chat.id, message.message_id);
       } else if (data.startsWith(CALLBACKS.ADMIN_CONFIRM)) {
         await handleAdminConfirm(bot, query);
       } else if (data.startsWith(CALLBACKS.ADMIN_REJECT)) {
@@ -64,28 +67,28 @@ function register(bot) {
   // ==========================================
   // LEGACY COMMANDS (Kept for convenience/speed)
   // ==========================================
-  bot.onText(/\/orders/, async (msg) => {
+  bot.onText(/\/orders(?:@\w+)?\s*$/, async (msg) => {
     if (!User.isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, MESSAGES.ADMIN_ONLY);
     await showPendingOrders(bot, msg.chat.id);
   });
 
-  bot.onText(/\/confirm(?:\s+(\d+))?/, async (msg, match) => {
+  bot.onText(/\/confirm(?:@\w+)?(?:\s+(\d+))?\s*$/, async (msg, match) => {
     if (!User.isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, MESSAGES.ADMIN_ONLY);
     await startConfirmFlow(bot, msg.chat.id, msg.from.id, match[1]);
   });
 
-  bot.onText(/\/reject(?:\s+(\d+))?/, async (msg, match) => {
+  bot.onText(/\/reject(?:@\w+)?(?:\s+(\d+))?\s*$/, async (msg, match) => {
     if (!User.isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, MESSAGES.ADMIN_ONLY);
     await rejectOrder(bot, msg.chat.id, msg.from.id, match[1]);
   });
 
-  bot.onText(/\/addcredits(?:\s+(\d+)\s+(\d+(?:\.\d+)?))?/, async (msg, match) => {
+  bot.onText(/\/addcredits(?:@\w+)?(?:\s+(\d+)\s+(\d+(?:\.\d+)?))?\s*$/, async (msg, match) => {
     if (!User.isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, MESSAGES.ADMIN_ONLY);
     await addCreditsManual(bot, msg.chat.id, msg.from.id, match[1], match[2]);
   });
 
   // /addbalance <id> <amount> — alias for addcredits (matching Api_Pixel_Bot)
-  bot.onText(/\/addbalance(?:\s+(\d+)\s+(\d+(?:\.\d+)?))?/, async (msg, match) => {
+  bot.onText(/\/addbalance(?:@\w+)?(?:\s+(\d+)\s+(\d+(?:\.\d+)?))?\s*$/, async (msg, match) => {
     if (!User.isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, MESSAGES.ADMIN_ONLY);
     await addCreditsManual(bot, msg.chat.id, msg.from.id, match[1], match[2]);
   });
@@ -112,13 +115,13 @@ function register(bot) {
   });
 
   // /removecredits <id> <amount> — remove credits from a user
-  bot.onText(/\/removecredits(?:\s+(\d+)\s+(\d+(?:\.\d+)?))?/, async (msg, match) => {
+  bot.onText(/\/removecredits(?:@\w+)?(?:\s+(\d+)\s+(\d+(?:\.\d+)?))?\s*$/, async (msg, match) => {
     if (!User.isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, MESSAGES.ADMIN_ONLY);
     await removeCreditsManual(bot, msg.chat.id, msg.from.id, match[1], match[2]);
   });
 
   // /checkcredits <id> — check a user's credit balance
-  bot.onText(/\/checkcredits(?:\s+(\d+))?/, async (msg, match) => {
+  bot.onText(/\/checkcredits(?:@\w+)?(?:\s+(\d+))?\s*$/, async (msg, match) => {
     if (!User.isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, MESSAGES.ADMIN_ONLY);
     await checkCredits(bot, msg.chat.id, match[1]);
   });
@@ -139,48 +142,11 @@ async function sendAdminDashboard(bot, chatId, messageId = null) {
     `🟢 *Orders Pending:* ${pendingCount}`,
   ].join('\n');
 
-  const buttons = [
-    [{ text: '📊 Global Statistics', callback_data: CALLBACKS.ADMIN_STATS }],
-    [{ text: `📋 Pending Orders (${pendingCount})`, callback_data: 'adm_orders_list' }],
-    [{ text: '💳 Add Credits to User', url: `https://t.me/${bot.options.username}?start=admin_addcredits` }], 
-    [{ text: '❌ Close Panel', callback_data: 'adm_close' }]
-  ]; // Note: adding credits requires typing, so we hint the command or use deep linking (placeholder)
-
-  // Realistically, addCredits is best done via command due to input needs, 
-  // but we provide the command instructions in the panel text or a dedicated button.
   const keyboard = { inline_keyboard: [
     [{ text: '📊 Global Statistics', callback_data: CALLBACKS.ADMIN_STATS }],
     [{ text: `📦 Pending Orders (${pendingCount})`, callback_data: 'adm_orders_list' }],
     [{ text: '❓ Help / Commands', callback_data: 'adm_help' }]
   ]};
-
-  bot.on('callback_query', async (query) => {
-      if(query.data === 'adm_help') {
-          await bot.answerCallbackQuery(query.id);
-          const helpText = [
-            '🛠 *Admin Commands*',
-            '',
-            '`/admin` — Open this dashboard',
-            '`/orders` — List pending orders',
-            '`/confirm <id>` — Confirm an order',
-            '`/reject <id>` — Reject an order',
-            '`/addcredits <userId> <amount>` — Give credits',
-            '`/removecredits <userId> <amount>` — Remove credits',
-            '`/checkcredits <userId>` — Check user balance',
-            '`/addbalance <userId> <amount>` — Alias for addcredits',
-            '`/apistatus` — API server health & devices',
-            '`/apibalance` — Check API key balance',
-            '`/maintenance` — Toggle maintenance mode',
-            '`/health` — Quick API health check'
-          ].join('\n');
-          await bot.editMessageText(helpText, {
-            chat_id: query.message.chat.id,
-            message_id: query.message.message_id,
-            parse_mode: 'Markdown',
-            reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Panel', callback_data: CALLBACKS.ADMIN_MENU }]] }
-          });
-      }
-  });
 
   if (messageId) {
     try {
@@ -189,6 +155,33 @@ async function sendAdminDashboard(bot, chatId, messageId = null) {
   } else {
     await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: keyboard });
   }
+}
+
+async function showAdminHelp(bot, chatId, messageId) {
+  const helpText = [
+    '🛠 *Admin Commands*',
+    '',
+    '`/admin` — Open this dashboard',
+    '`/orders` — List pending orders',
+    '`/confirm <id>` — Confirm an order',
+    '`/reject <id>` — Reject an order',
+    '`/addcredits <userId> <amount>` — Give credits',
+    '`/removecredits <userId> <amount>` — Remove credits',
+    '`/checkcredits <userId>` — Check user balance',
+    '`/addbalance <userId> <amount>` — Alias for addcredits',
+    '`/apistatus` — API server health & devices',
+    '`/apibalance` — Check API key balance',
+    '`/maintenance` — Toggle maintenance mode',
+    '`/health` — Quick API health check'
+  ].join('\n');
+  try {
+    await bot.editMessageText(helpText, {
+      chat_id: chatId,
+      message_id: messageId,
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Panel', callback_data: CALLBACKS.ADMIN_MENU }]] }
+    });
+  } catch {}
 }
 
 async function showStats(bot, chatId, messageId) {
@@ -231,28 +224,55 @@ async function showPendingOrders(bot, chatId, messageId = null) {
     return;
   }
 
-  let text = '📋 *Pending Orders*\n\n';
-  for (const p of pending) {
-    const user = User.findById(p.telegram_user_id);
-    const username = user?.username ? `@${user.username}` : 'N/A';
-    text += `*#${p.id}* — ${username} (\`${p.telegram_user_id}\`)\n`;
-    text += `  💰 $${p.amount} → ${p.credits_added} credits\n`;
-    text += `  📱 ${p.payment_method || p.payment_provider}\n`;
-    if (p.unique_amount) text += `  🔢 Unique: $${p.unique_amount}\n`;
-    text += `  🕐 ${formatDate(p.created_at)}\n\n`;
-  }
-
-  text += `To confirm: \`/confirm <order_id>\`\nTo manually reject: \`/reject <order_id>\``;
-
+  const MAX_LEN = 3800; // stay well under Telegram's 4096 limit
+  const header = '📋 *Pending Orders*\n\n';
+  const footer = '\nTo confirm: `/confirm <order_id>`\nTo manually reject: `/reject <order_id>`';
   const keyboard = { inline_keyboard: [
     [{ text: '🔄 Refresh', callback_data: 'adm_orders_list' }],
     [{ text: '⬅️ Back to Panel', callback_data: CALLBACKS.ADMIN_MENU }]
   ]};
 
-  if (messageId) {
-    await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: 'Markdown', reply_markup: keyboard });
-  } else {
-    await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: keyboard });
+  // Build individual order entries
+  const entries = pending.map(p => {
+    const user = User.findById(p.telegram_user_id);
+    const username = user?.username ? `@${escapeMarkdownV1(user.username)}` : 'N/A';
+    let entry = `*#${p.id}* — ${username} (\`${p.telegram_user_id}\`)\n`;
+    entry += `  💰 $${p.amount} → ${p.credits_added} credits\n`;
+    entry += `  📱 ${escapeMarkdownV1(p.payment_method || p.payment_provider || 'N/A')}\n`;
+    if (p.unique_amount) entry += `  🔢 Unique: $${p.unique_amount}\n`;
+    entry += `  🕐 ${formatDate(p.created_at)}\n`;
+    return entry;
+  });
+
+  // Chunk entries so each message stays under MAX_LEN
+  const chunks = [];
+  let current = '';
+  for (const entry of entries) {
+    if (current.length + entry.length + header.length + footer.length > MAX_LEN && current.length > 0) {
+      chunks.push(current);
+      current = '';
+    }
+    current += entry + '\n';
+  }
+  if (current.length > 0) chunks.push(current);
+
+  const totalPages = chunks.length;
+  let isFirst = true;
+
+  for (let i = 0; i < chunks.length; i++) {
+    const pageLabel = totalPages > 1 ? `_(Page ${i + 1}/${totalPages})_\n` : '';
+    const text = header + pageLabel + chunks[i] + (i === chunks.length - 1 ? footer : '');
+    const opts = {
+      parse_mode: 'Markdown',
+      ...(i === chunks.length - 1 ? { reply_markup: keyboard } : {}),
+    };
+
+    if (isFirst && messageId) {
+      await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...opts });
+    } else {
+      await bot.sendMessage(chatId, text, opts);
+    }
+    isFirst = false;
   }
 }
 
@@ -272,7 +292,7 @@ async function startConfirmFlow(bot, chatId, adminId, inputOrderId) {
   if (purchase.payment_status !== 'pending') return bot.sendMessage(chatId, `⚠️ Order #${orderId} status is "${purchase.payment_status}" — cannot confirm.`);
 
   const user = User.findById(purchase.telegram_user_id);
-  const username = user?.username ? `@${user.username}` : `ID:${purchase.telegram_user_id}`;
+  const username = user?.username ? `@${escapeMarkdownV1(user.username)}` : `ID:${purchase.telegram_user_id}`;
   const currentBalance = CreditService.getBalance(purchase.telegram_user_id);
 
   const confirmKey = `admin_confirm_${orderId}_${adminId}`;
@@ -319,6 +339,12 @@ async function handleAdminConfirm(bot, query) {
   const adminId = query.from.id;
   const orderId = parseInt(query.data.replace(CALLBACKS.ADMIN_CONFIRM, ''), 10);
 
+  // Enforce the 2-minute confirmation timeout
+  const confirmKey = `admin_confirm_${orderId}_${adminId}`;
+  if (!pendingConfirmations.has(confirmKey)) {
+    return bot.answerCallbackQuery(query.id, { text: '⏱️ Confirmation expired. Use /confirm again.' });
+  }
+
   const purchase = Purchase.getById(orderId);
   if (!purchase) {
     return bot.answerCallbackQuery(query.id, { text: 'Order not found.' });
@@ -332,8 +358,7 @@ async function handleAdminConfirm(bot, query) {
     return bot.answerCallbackQuery(query.id, { text: confirmation.error });
   }
 
-  // Clean up any pending confirmation entry
-  const confirmKey = `admin_confirm_${orderId}_${adminId}`;
+  // Clean up the pending confirmation entry
   pendingConfirmations.delete(confirmKey);
 
   logger.info('Admin confirmed payment', { orderId, adminId, credits: purchase.credits_added });
@@ -422,7 +447,7 @@ async function addCreditsManual(bot, chatId, adminId, inputUserId, inputAmount) 
   if (!user) return bot.sendMessage(chatId, `⚠️ User \`${userId}\` not found.`, { parse_mode: 'Markdown' });
 
   const currentBalance = CreditService.getBalance(userId);
-  const username = user.username ? `@${user.username}` : `ID:${userId}`;
+  const username = user.username ? `@${escapeMarkdownV1(user.username)}` : `ID:${userId}`;
   const actionKey = `addcr_${adminId}_${userId}_${Date.now()}`;
 
   pendingConfirmations.set(actionKey, { type: 'add', userId, amount, adminId });
@@ -454,12 +479,15 @@ async function executeAddCredits(bot, query) {
   if (!action) {
     return bot.answerCallbackQuery(query.id, { text: 'This action has expired.' });
   }
+  if (query.from.id !== action.adminId) {
+    return bot.answerCallbackQuery(query.id, { text: '⚠️ Only the admin who initiated this can confirm.' });
+  }
   pendingConfirmations.delete(actionKey);
 
   CreditService.addCredits(action.userId, action.amount);
   const newBalance = CreditService.getBalance(action.userId);
   const user = User.findById(action.userId);
-  const username = user?.username ? `@${user.username}` : `ID:${action.userId}`;
+  const username = user?.username ? `@${escapeMarkdownV1(user.username)}` : `ID:${action.userId}`;
 
   logger.info('Admin added credits', { adminId: action.adminId, userId: action.userId, amount: action.amount, newBalance });
 
@@ -497,7 +525,7 @@ async function removeCreditsManual(bot, chatId, adminId, inputUserId, inputAmoun
     return bot.sendMessage(chatId, `⚠️ Cannot remove *${amount}* credits. User only has *${currentBalance}* credits.`, { parse_mode: 'Markdown' });
   }
 
-  const username = user.username ? `@${user.username}` : `ID:${userId}`;
+  const username = user.username ? `@${escapeMarkdownV1(user.username)}` : `ID:${userId}`;
   const actionKey = `rmcr_${adminId}_${userId}_${Date.now()}`;
 
   pendingConfirmations.set(actionKey, { type: 'remove', userId, amount, adminId });
@@ -529,6 +557,9 @@ async function executeRemoveCredits(bot, query) {
   if (!action) {
     return bot.answerCallbackQuery(query.id, { text: 'This action has expired.' });
   }
+  if (query.from.id !== action.adminId) {
+    return bot.answerCallbackQuery(query.id, { text: '⚠️ Only the admin who initiated this can confirm.' });
+  }
   pendingConfirmations.delete(actionKey);
 
   const success = CreditService.removeCredits(action.userId, action.amount);
@@ -546,7 +577,7 @@ async function executeRemoveCredits(bot, query) {
 
   const newBalance = CreditService.getBalance(action.userId);
   const user = User.findById(action.userId);
-  const username = user?.username ? `@${user.username}` : `ID:${action.userId}`;
+  const username = user?.username ? `@${escapeMarkdownV1(user.username)}` : `ID:${action.userId}`;
 
   logger.info('Admin removed credits', { adminId: action.adminId, userId: action.userId, amount: action.amount, newBalance });
 
@@ -587,8 +618,8 @@ async function checkCredits(bot, chatId, inputUserId) {
   if (!user) return bot.sendMessage(chatId, `⚠️ User \`${userId}\` not found.`, { parse_mode: 'Markdown' });
 
   const balance = CreditService.getBalance(userId);
-  const username = user.username ? `@${user.username}` : 'N/A';
-  const firstName = user.first_name || 'N/A';
+  const username = user.username ? `@${escapeMarkdownV1(user.username)}` : 'N/A';
+  const firstName = escapeMarkdownV1(user.first_name || 'N/A');
 
   const msg = [
     '👤 *User Credit Info*',

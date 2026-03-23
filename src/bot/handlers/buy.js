@@ -3,6 +3,7 @@ const PaymentService = require('../../services/paymentService');
 const UsdtBep20Service = require('../../services/payments/usdtBep20');
 const User = require('../../db/models/User');
 const { MESSAGES, CALLBACKS } = require('../../utils/constants');
+const { escapeMarkdownV1 } = require('../../utils/helpers');
 const logger = require('../../utils/logger');
 
 // Track users waiting to submit Binance order IDs
@@ -195,7 +196,7 @@ function register(bot) {
 
     // Notify all admins
     const adminIds = config.admin.userIds;
-    const username = msg.from.username ? `@${msg.from.username}` : `ID:${userId}`;
+    const username = msg.from.username ? `@${escapeMarkdownV1(msg.from.username)}` : `ID:${userId}`;
 
     for (const adminId of adminIds) {
       try {
