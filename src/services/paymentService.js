@@ -232,7 +232,7 @@ const PaymentService = {
       methods.push({ id: 'usdt_trc20', label: '🔴 USDT (TRC-20) ( ✅ Automatic)' });
     }
     if (config.payment.binanceTransfer.enabled) {
-      methods.push({ id: 'binance_transfer', label: '🟡 Binance Pay (Manual)' });
+      methods.push({ id: 'binance_transfer', label: '🟡 Binance Pay' });
     }
     return methods;
   },
