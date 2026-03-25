@@ -225,14 +225,14 @@ const PaymentService = {
 
   getAvailableMethods() {
     const methods = [];
+    if (config.payment.binanceTransfer.enabled) {
+      methods.push({ id: 'binance_transfer', label: '🟡 Binance Pay (✅ Recommended)' });
+    }
     if (config.payment.usdt.enabled) {
       methods.push({ id: 'usdt_bep20', label: '🔵 USDT (BEP-20) ( ✅ Automatic)' });
     }
     if (config.payment.usdtTrc20.enabled) {
       methods.push({ id: 'usdt_trc20', label: '🔴 USDT (TRC-20) ( ✅ Automatic)' });
-    }
-    if (config.payment.binanceTransfer.enabled) {
-      methods.push({ id: 'binance_transfer', label: '🟡 Binance Pay (✅ Recommended)' });
     }
     return methods;
   },
