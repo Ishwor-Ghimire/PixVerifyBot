@@ -63,7 +63,7 @@ const BinanceApiClient = {
       const startTimestamp = Date.now() - (lookbackMinutes * 60 * 1000);
 
       const data = await this._signedGet('/sapi/v1/pay/transactions', {
-        startTimestamp,
+        startTime: startTimestamp,
         limit: 100,
       });
 
