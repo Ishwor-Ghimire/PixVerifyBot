@@ -91,22 +91,41 @@ const PaymentService = {
   },
 
   /**
-   * Create a Binance Transfer order.
+   * Create a Binance Transfer order with unique amount for auto-detection.
    */
   createBinanceTransferOrder(telegramUserId, pkg) {
+    const baseAmount = parseFloat(pkg.price);
+
+    let uniqueAmount;
+    let attempts = 0;
+    do {
+      uniqueAmount = BinanceApiClient.generateUniqueAmount(baseAmount);
+      attempts++;
+    } while (Purchase.isUniqueAmountTaken(uniqueAmount) && attempts < 20);
+
+    if (Purchase.isUniqueAmountTaken(uniqueAmount)) {
+      logger.warn('Binance Transfer unique amount collision after 20 attempts', { baseAmount, telegramUserId });
+      return {
+        error: 'AMOUNT_COLLISION',
+        message: 'Too many active orders with similar amounts. Please try again shortly.',
+      };
+    }
+
     const orderId = Purchase.create({
       telegramUserId,
       amount: pkg.price,
       creditsAdded: pkg.credits,
       paymentProvider: 'binance_transfer',
       paymentMethod: 'Binance Transfer',
+      uniqueAmount,
     });
 
-    logger.info('Binance Transfer order created', { orderId, telegramUserId });
+    logger.info('Binance Transfer order created', { orderId, uniqueAmount, telegramUserId });
 
     return {
       orderId,
       method: 'binance_transfer',
+      uniqueAmount,
       binancePayId: config.payment.binanceTransfer.payId,
     };
   },
@@ -142,7 +161,7 @@ const PaymentService = {
       };
     }
 
-    const expectedAmount = parseFloat(purchase.amount);
+    const expectedAmount = parseFloat(purchase.unique_amount || purchase.amount);
     const result = await BinanceApiClient.verifyPayment(binanceOrderId, expectedAmount);
 
     if (!result.verified) {
@@ -226,7 +245,10 @@ const PaymentService = {
   getAvailableMethods() {
     const methods = [];
     if (config.payment.binanceTransfer.enabled) {
-      methods.push({ id: 'binance_transfer', label: '🟡 Binance Pay (✅ Recommended)' });
+      const autoLabel = config.payment.binanceTransfer.autoVerifyEnabled
+        ? '🟡 Binance Pay (✅ Automatic)'
+        : '🟡 Binance Pay (manual)';
+      methods.push({ id: 'binance_transfer', label: autoLabel });
     }
     if (config.payment.usdt.enabled) {
       methods.push({ id: 'usdt_bep20', label: '🔵 USDT (BEP-20) ( ✅ Automatic)' });

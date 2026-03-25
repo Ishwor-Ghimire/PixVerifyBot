@@ -77,7 +77,7 @@ const Purchase = {
     return getDb().prepare(
       `SELECT * FROM purchases
        WHERE payment_status = 'pending'
-         AND payment_provider IN ('usdt_bep20', 'usdt_trc20')
+         AND payment_provider IN ('usdt_bep20', 'usdt_trc20', 'binance_transfer')
        ORDER BY created_at ASC`
     ).all();
   },
@@ -92,18 +92,27 @@ const Purchase = {
    * We normalize DB timestamps in SQL using REPLACE + || 'Z' to ensure
    * consistent string comparison against the ISO cutoff.
    */
-  expirePendingOrders(expiryMinutes) {
+  expirePendingOrders(expiryMinutes, binanceExpiryMinutes = null) {
     const cutoff = new Date(Date.now() - expiryMinutes * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
 
     // Normalize: replace space with T, strip any existing Z, then append Z
     // This ensures both 'YYYY-MM-DD HH:MM:SS' and 'YYYY-MM-DDTHH:MM:SSZ' become 'YYYY-MM-DDTHH:MM:SSZ'
     const normalizeExpr = `REPLACE(REPLACE(created_at, ' ', 'T'), 'Z', '') || 'Z'`;
 
+    // Use a separate (longer) cutoff for Binance Transfer orders if specified
+    const binanceCutoff = binanceExpiryMinutes
+      ? new Date(Date.now() - binanceExpiryMinutes * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z')
+      : cutoff;
+
     const expired = getDb().prepare(
       `SELECT * FROM purchases
        WHERE payment_status = 'pending'
-         AND ${normalizeExpr} < ?`
-    ).all(cutoff);
+         AND (
+           (payment_provider != 'binance_transfer' AND ${normalizeExpr} < ?)
+           OR
+           (payment_provider = 'binance_transfer' AND ${normalizeExpr} < ?)
+         )`
+    ).all(cutoff, binanceCutoff);
 
     if (expired.length > 0) {
       const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
@@ -111,8 +120,12 @@ const Purchase = {
         `UPDATE purchases
          SET payment_status = 'expired', completed_at = ?
          WHERE payment_status = 'pending'
-           AND ${normalizeExpr} < ?`
-      ).run(now, cutoff);
+           AND (
+             (payment_provider != 'binance_transfer' AND ${normalizeExpr} < ?)
+             OR
+             (payment_provider = 'binance_transfer' AND ${normalizeExpr} < ?)
+           )`
+      ).run(now, cutoff, binanceCutoff);
     }
 
     return expired;

@@ -111,6 +111,9 @@ const BinanceApiClient = {
    * Verify a specific Pay transaction by order ID.
    * Checks if a payment was received with the expected amount.
    * Returns { verified, transaction } or { verified: false, reason }
+   *
+   * NOTE: This is the MANUAL fallback path — used when auto-detection fails
+   * and the user submits a transaction ID for admin review.
    */
   async verifyPayment(orderIdFromUser, expectedAmount) {
     try {
@@ -180,6 +183,114 @@ const BinanceApiClient = {
       logger.error('Payment verification error', { error: err.message });
       return { verified: false, reason: 'Verification service error. Please try again or contact support.' };
     }
+  },
+
+  // ─── Deposit History API (auto-detection) ────────────────────────────
+
+  /**
+   * Generate a unique payment amount by adding random small decimals.
+   * e.g. base $12.50 → $12.534
+   */
+  generateUniqueAmount(baseAmount) {
+    const suffix = Math.floor(Math.random() * 90 + 10); // 10–99
+    return parseFloat((baseAmount + suffix / 1000).toFixed(3));
+  },
+
+  /**
+   * Fetch recent USDT deposit history from Binance spot account.
+   * Uses GET /sapi/v1/capital/deposit/hisrec with status=1 (success).
+   * All timestamps are in milliseconds.
+   *
+   * @param {number} lookbackMinutes - How far back to look (default 120)
+   * @returns {Array} Array of completed deposit objects
+   */
+  async getDepositHistory(lookbackMinutes = 120) {
+    try {
+      const startTime = Date.now() - (lookbackMinutes * 60 * 1000);
+
+      const data = await this._signedGet('/sapi/v1/capital/deposit/hisrec', {
+        coin: 'USDT',
+        status: 1, // only completed deposits
+        startTime,
+        limit: 1000,
+      });
+
+      // Response is an array directly (per Binance docs)
+      const deposits = Array.isArray(data) ? data : [];
+
+      if (deposits.length > 0) {
+        logger.info('Binance deposit history fetched', {
+          count: deposits.length,
+          sampleKeys: Object.keys(deposits[0]),
+        });
+      }
+
+      return deposits;
+    } catch (err) {
+      logger.error('Failed to fetch deposit history', {
+        status: err.response?.status,
+        error: err.response?.data || err.message,
+      });
+      return [];
+    }
+  },
+
+  /**
+   * Find a matching USDT deposit for the expected unique amount.
+   * Compares against deposits from the deposit history API.
+   *
+   * @param {number} expectedAmount - The unique amount to match
+   * @param {number} afterTimestampMs - Only consider deposits after this time (ms)
+   * @param {Set<string>} [excludeRefs] - txId references to skip (already used by other orders)
+   * @returns {object|null} { txId, amount, insertTime } or null
+   */
+  async findMatchingDeposit(expectedAmount, afterTimestampMs, excludeRefs = null) {
+    const deposits = await this.getDepositHistory(120);
+    const tolerance = 0.0005; // Half the 0.001 step — prevents adjacent amount overlap
+
+    if (deposits.length > 0) {
+      logger.info('Binance findMatchingDeposit comparing', {
+        expectedAmount,
+        tolerance,
+        depositCount: deposits.length,
+        depositAmounts: deposits.slice(0, 10).map(d => parseFloat(d.amount)),
+      });
+    }
+
+    for (const deposit of deposits) {
+      // Use insertTime (always present, in ms) for time filtering
+      const depositTimeMs = deposit.insertTime || 0;
+      if (afterTimestampMs && depositTimeMs < afterTimestampMs) {
+        continue;
+      }
+
+      // Skip already-used deposits
+      const depositRef = `binance_deposit_${deposit.txId}`;
+      if (excludeRefs && excludeRefs.has(depositRef)) {
+        continue;
+      }
+
+      const depositAmount = parseFloat(deposit.amount || '0');
+      const diff = Math.abs(depositAmount - expectedAmount);
+
+      if (diff < tolerance) {
+        logger.info('Binance deposit MATCH found', {
+          txId: deposit.txId,
+          depositAmount,
+          expectedAmount,
+          diff,
+          network: deposit.network,
+        });
+        return {
+          txId: deposit.txId,
+          amount: depositAmount,
+          insertTime: depositTimeMs,
+          network: deposit.network,
+        };
+      }
+    }
+
+    return null;
   },
 };
 

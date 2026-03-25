@@ -1,6 +1,7 @@
 const Purchase = require('../../db/models/Purchase');
 const UsdtBep20Service = require('./usdtBep20');
 const UsdtTrc20Service = require('./usdtTrc20');
+const BinanceApiClient = require('./binancePay');
 const PaymentService = require('../paymentService');
 const User = require('../../db/models/User');
 const config = require('../../config');
@@ -15,13 +16,14 @@ const ORDER_EXPIRY_MINUTES = config.payment.orderExpiryMinutes || 15;
 
 /**
  * Background payment monitor.
- * Polls for completed USDT BEP-20 / TRC-20 payments and auto-confirms.
- * Binance Transfer orders are confirmed manually by admin.
+ * Polls for completed USDT BEP-20 / TRC-20 payments and Binance deposits,
+ * then auto-confirms matching orders.
+ * Binance Transfer orders are also checked manually by admin as fallback.
  *
  * Each cycle:
  *   1. Expire stale orders (older than ORDER_EXPIRY_MINUTES).
- *   2. Fetch only blockchain-based pending orders.
- *   3. Check each order against on-chain transfers.
+ *   2. Fetch pending blockchain + Binance orders.
+ *   3. Check each order against on-chain transfers or deposit history.
  */
 const PaymentMonitor = {
   start(bot, intervalMs = 15000) {
@@ -51,7 +53,7 @@ const PaymentMonitor = {
       // Step 1: Expire old orders
       await this.expireStaleOrders();
 
-      // Step 2: Only fetch blockchain-based pending orders
+      // Step 2: Fetch pending orders (blockchain + Binance)
       const pending = Purchase.getPendingBlockchain();
       if (pending.length === 0) return;
 
@@ -71,6 +73,8 @@ const PaymentMonitor = {
             await this.checkUsdtPayment(purchase);
           } else if (purchase.payment_provider === 'usdt_trc20') {
             await this.checkUsdtTrc20Payment(purchase);
+          } else if (purchase.payment_provider === 'binance_transfer') {
+            await this.checkBinanceDepositPayment(purchase);
           }
         } catch (err) {
           logger.error('Payment check error', {
@@ -89,9 +93,12 @@ const PaymentMonitor = {
 
   /**
    * Mark orders older than ORDER_EXPIRY_MINUTES as expired and notify users.
+   * Binance Transfer orders get a longer 30-minute window since deposit
+   * confirmation can take longer than on-chain transfers.
    */
   async expireStaleOrders() {
-    const expired = Purchase.expirePendingOrders(ORDER_EXPIRY_MINUTES);
+    const BINANCE_EXPIRY_MINUTES = 30;
+    const expired = Purchase.expirePendingOrders(ORDER_EXPIRY_MINUTES, BINANCE_EXPIRY_MINUTES);
     if (expired.length === 0) return;
 
     logger.info('Expired stale orders', {
@@ -103,10 +110,11 @@ const PaymentMonitor = {
 
     for (const order of expired) {
       try {
+        const expiryMins = order.payment_provider === 'binance_transfer' ? BINANCE_EXPIRY_MINUTES : ORDER_EXPIRY_MINUTES;
         await botInstance.sendMessage(order.telegram_user_id, [
           '⏰ *Order Expired*',
           '',
-          `📋 Order #${order.id} has expired (no payment received within ${ORDER_EXPIRY_MINUTES} minutes).`,
+          `📋 Order #${order.id} has expired (no payment received within ${expiryMins} minutes).`,
           '',
           'Use /buy to create a new order.',
         ].join('\n'), { parse_mode: 'Markdown' });
@@ -180,6 +188,45 @@ const PaymentMonitor = {
       purchaseId: purchase.id,
       txHash: tx.hash,
       amount: tx.amount,
+    });
+  },
+
+  /**
+   * Check for a Binance deposit matching this order's unique amount.
+   * Uses the deposit history API (/sapi/v1/capital/deposit/hisrec).
+   */
+  async checkBinanceDepositPayment(purchase) {
+    if (!BinanceApiClient.isConfigured()) return;
+
+    const expectedAmount = parseFloat(purchase.unique_amount);
+    if (!expectedAmount) {
+      logger.warn('Binance order has no unique_amount', { purchaseId: purchase.id });
+      return;
+    }
+
+    // Convert order creation time to ms for the deposit history API
+    const createdAtUtc = purchase.created_at.endsWith('Z') ? purchase.created_at : purchase.created_at.replace(' ', 'T') + 'Z';
+    const orderTimestampMs = new Date(createdAtUtc).getTime() - 60000; // 1 min buffer
+    if (!Number.isFinite(orderTimestampMs)) {
+      logger.warn('Binance order has invalid created_at timestamp', { purchaseId: purchase.id });
+      return;
+    }
+
+    // Collect already-used deposit references
+    const usedRefs = Purchase.getUsedPaymentReferences();
+
+    const deposit = await BinanceApiClient.findMatchingDeposit(expectedAmount, orderTimestampMs, usedRefs);
+    if (!deposit) return;
+
+    const reference = `binance_deposit_${deposit.txId}`;
+    const confirmed = await this.confirmPurchase(purchase, reference);
+    if (!confirmed) return;
+
+    logger.info('Binance deposit payment auto-confirmed', {
+      purchaseId: purchase.id,
+      txId: deposit.txId,
+      amount: deposit.amount,
+      network: deposit.network,
     });
   },
 

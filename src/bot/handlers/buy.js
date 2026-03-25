@@ -1,6 +1,7 @@
 const config = require('../../config');
 const PaymentService = require('../../services/paymentService');
 const UsdtBep20Service = require('../../services/payments/usdtBep20');
+const BinanceApiClient = require('../../services/payments/binancePay');
 const User = require('../../db/models/User');
 const { MESSAGES, CALLBACKS } = require('../../utils/constants');
 const { escapeMarkdownV1 } = require('../../utils/helpers');
@@ -121,6 +122,8 @@ function register(bot) {
       await handleBep20IvePaid(bot, chatId, userId, orderId, query.message.message_id);
     } else if (method === 'usdt_trc20') {
       await handleTrc20IvePaid(bot, chatId, userId, orderId);
+    } else if (method === 'binance_transfer') {
+      await handleBinanceIvePaid(bot, chatId, userId, orderId, query.message.message_id);
     }
   });
 
@@ -167,16 +170,22 @@ function register(bot) {
 
     pendingVerifications.delete(userId);
 
+    // Check if the order is still pending before proceeding
+    const Purchase = require('../../db/models/Purchase');
+    const purchase = Purchase.getById(pending.orderId);
+    if (!purchase || purchase.payment_status !== 'pending') {
+      const statusMsg = purchase?.payment_status === 'completed'
+        ? '✅ This order has already been confirmed automatically. No action needed!'
+        : '⚠️ This order is no longer pending.';
+      return bot.sendMessage(msg.chat.id, statusMsg);
+    }
+
     // Save the transaction ID as payment reference on the order
     try {
-      const Purchase = require('../../db/models/Purchase');
-      const purchase = Purchase.getById(pending.orderId);
-      if (purchase && purchase.payment_status === 'pending') {
-        Purchase.updateStatusIfPending(pending.orderId, {
-          paymentStatus: 'pending', // keep pending for admin
-          paymentReference: `binance_txid_${submittedId}`,
-        });
-      }
+      Purchase.updateStatusIfPending(pending.orderId, {
+        paymentStatus: 'pending', // keep pending for admin
+        paymentReference: `binance_txid_${submittedId}`,
+      });
     } catch (e) {
       logger.error('Error saving payment reference', { error: e.message });
     }
@@ -430,17 +439,26 @@ async function handleUsdtTrc20Payment(bot, chatId, userId, pkg) {
 }
 
 /**
- * Handle Binance Transfer payment flow
+ * Handle Binance Transfer payment flow.
+ * Now shows a unique amount for auto-detection via deposit history API.
  */
 async function handleBinanceTransfer(bot, chatId, userId, pkg) {
   const order = PaymentService.createBinanceTransferOrder(userId, pkg);
+
+  // Handle order creation errors (e.g. amount collision)
+  if (order.error) {
+    return bot.sendMessage(chatId, `⚠️ ${order.message || 'Could not create order. Please try again.'}`);
+  }
+
+  const uniqueAmountStr = parseFloat(order.uniqueAmount.toFixed(3));
 
   const msg = [
     '🟡 *Binance Pay Payment*',
     '',
     `📋 Order #${order.orderId}`,
     `📦 Package: *${pkg.label}*`,
-    `💰 Amount: *$${pkg.price} USDT*`,
+    '',
+    `💰 Send exactly: *\`${uniqueAmountStr}\` USDT*`,
     '',
     '📬 *Send USDT via Binance Pay to:*',
     `Pay ID: \`${order.binancePayId}\``,
@@ -448,21 +466,143 @@ async function handleBinanceTransfer(bot, chatId, userId, pkg) {
     '📝 *Steps:*',
     '1. Open *Binance App* → *Pay* → *Send*',
     '2. Enter the Pay ID above',
-    `3. Send exactly *$${pkg.price} USDT*`,
-    '4. After sending, tap *"I\'ve Paid"* below and send your Transaction ID',
+    `3. Send exactly *\`${uniqueAmountStr}\` USDT*`,
+    config.payment.binanceTransfer.autoVerifyEnabled
+      ? '4. After sending, tap *"I\'ve Paid"* below or wait for automatic detection'
+      : '4. After sending, tap *"I\'ve Paid"* below and submit your Transaction ID',
     '',
-    '⏱️ This order expires in 15 minutes.',
+    '⏱️ This order expires in 30 minutes.',
   ].join('\n');
 
   await bot.sendMessage(chatId, msg, {
     parse_mode: 'Markdown',
     reply_markup: {
       inline_keyboard: [
-        [{ text: '✅ I\'ve Paid', callback_data: `${CALLBACKS.BINANCE_PAID}${order.orderId}` }],
+        [{ text: '✅ I\'ve Paid', callback_data: `${CALLBACKS.CRYPTO_PAID}${order.orderId}_binance_transfer` }],
         [{ text: '❌ Cancel', callback_data: CALLBACKS.PAY_CANCEL }],
       ],
     },
   });
+}
+
+/**
+ * Handle Binance Pay "I've Paid" — try auto-scan via deposit history,
+ * fall back to manual TX ID + admin review if deposit not found.
+ */
+async function handleBinanceIvePaid(bot, chatId, userId, orderId, messageId) {
+  const Purchase = require('../../db/models/Purchase');
+  const purchase = Purchase.getById(orderId);
+
+  if (!purchase || purchase.payment_status !== 'pending') {
+    return bot.sendMessage(chatId, '⚠️ This order is no longer pending.');
+  }
+  if (purchase.telegram_user_id !== userId) {
+    return bot.sendMessage(chatId, '⚠️ This order does not belong to you.');
+  }
+
+  // Only attempt auto-scan if API credentials are configured
+  if (BinanceApiClient.isConfigured()) {
+    await bot.sendMessage(chatId, '⏳ Scanning Binance deposit history for your payment...');
+
+    const expectedAmount = parseFloat(purchase.unique_amount);
+    const createdAtUtc = purchase.created_at.endsWith('Z') ? purchase.created_at : purchase.created_at.replace(' ', 'T') + 'Z';
+    const orderTimestampMs = new Date(createdAtUtc).getTime() - 60000;
+
+    const usedRefs = Purchase.getUsedPaymentReferences();
+    const deposit = await BinanceApiClient.findMatchingDeposit(expectedAmount, orderTimestampMs, usedRefs);
+
+    if (deposit) {
+      // Auto-confirm!
+      const reference = `binance_deposit_${deposit.txId}`;
+      const confirmation = PaymentService.confirmPayment(orderId, reference);
+
+      // Clear any pending manual verification for this user
+      pendingVerifications.delete(userId);
+
+      if (confirmation.success) {
+        try {
+          await bot.editMessageReplyMarkup(
+            { inline_keyboard: [] },
+            { chat_id: chatId, message_id: messageId }
+          );
+        } catch { }
+
+        await bot.sendMessage(chatId, [
+          '✅ *Payment Confirmed!*',
+          '',
+          `💰 *${purchase.credits_added} credits* added to your balance.`,
+          `📋 Order #${orderId}`,
+          '',
+          'Use /run to generate a link or /balance to check your balance.',
+        ].join('\n'), { parse_mode: 'Markdown' });
+
+        // Notify referrer if they earned a reward
+        if (confirmation.referrerRewarded) {
+          try {
+            const referrerBalance = User.getBalance(confirmation.referrerRewarded);
+            const rewardMsg = MESSAGES.REFERRAL_REWARD_NOTIFY
+              .replace('{reward}', config.referral.rewardCredits)
+              .replace('{balance}', referrerBalance);
+            await bot.sendMessage(confirmation.referrerRewarded, rewardMsg, {
+              parse_mode: 'Markdown',
+            });
+          } catch (err) {
+            logger.warn('Could not notify referrer of reward', {
+              referrerId: confirmation.referrerRewarded,
+              error: err.message,
+            });
+          }
+        }
+
+        logger.info('Binance deposit confirmed via I\'ve Paid scan', {
+          orderId,
+          txId: deposit.txId,
+          amount: deposit.amount,
+          userId,
+        });
+        return;
+      } else if (confirmation.error === 'Already confirmed') {
+        // Race: monitor confirmed it between our scan and confirm call
+        await bot.sendMessage(chatId, '✅ Your payment has already been confirmed! Check /balance.');
+        return;
+      } else {
+        await bot.sendMessage(chatId, `⚠️ ${confirmation.error || 'Could not confirm order.'}`);
+        return;
+      }
+    }
+  }
+
+  // Auto-scan failed or not configured → fall back to manual TX ID submission
+  pendingVerifications.set(userId, { orderId, chatId, method: 'binance_transfer' });
+  setTimeout(() => pendingVerifications.delete(userId), 30 * 60 * 1000);
+
+  const fallbackLines = [
+    '⏳ *Deposit Not Detected Yet*',
+    '',
+    `📋 Order #${orderId}`,
+    '',
+  ];
+
+  if (config.payment.binanceTransfer.autoVerifyEnabled) {
+    fallbackLines.push(
+      'The deposit may still be processing. You can either:',
+      '• *Wait* — the system checks automatically every 15 seconds',
+      '• *Submit your Transaction ID* manually for admin review',
+    );
+  } else {
+    fallbackLines.push(
+      'Please submit your *Transaction ID* for admin review.',
+    );
+  }
+
+  fallbackLines.push(
+    '',
+    'Send your *Binance Pay Order (Transaction) ID* now.',
+    '',
+    '_You can find it in: Binance App → Pay → Transaction History → tap the transaction → copy the Order ID_',
+  );
+
+  await bot.sendMessage(chatId, fallbackLines.join('\n'), { parse_mode: 'Markdown' });
 }
 
 module.exports = { register };
