@@ -17,14 +17,17 @@ function parseApiError(error) {
     return { code: 'NETWORK_ERROR', message: 'Cannot reach the generation API', status: 0 };
   }
   const { status, data } = error.response;
-  const detail = data?.detail || {};
-  // Handle both string and object detail formats
-  const code = typeof detail === 'string' ? detail : detail.code;
-  const message = typeof detail === 'string' ? detail : detail.message;
+  const detail = data?.detail;
+  const detailObject = detail && typeof detail === 'object' ? detail : {};
+  const code = data?.code || (typeof detail === 'string' ? detail : detailObject.code);
+  const message = data?.message || (typeof detail === 'string' ? detail : detailObject.message);
   return {
     code: (code || `HTTP_${status}`).toUpperCase(),
     message: message || error.message,
     status,
+    url: data?.url || detailObject.url || null,
+    created_at: data?.created_at || detailObject.created_at || null,
+    email: data?.email || detailObject.email || null,
   };
 }
 
@@ -63,6 +66,7 @@ const GoogleOneClient = {
         job_id: data.job_id,
         queue_position: data.queue_position,
         estimated_wait_seconds: data.estimated_wait_seconds,
+        device: data.device,
       };
     } catch (err) {
       const apiErr = parseApiError(err);
@@ -77,6 +81,22 @@ const GoogleOneClient = {
   async getJobStatus(jobId) {
     const { data } = await client.get(`/api/jobs/${jobId}`);
     return data;
+  },
+
+  /**
+   * Look up an existing result by email
+   */
+  async getResultByEmail(email) {
+    try {
+      const { data } = await client.get('/api/result', {
+        params: { email },
+      });
+      return { success: true, ...data };
+    } catch (err) {
+      const apiErr = parseApiError(err);
+      logger.warn('Result lookup failed', { email, ...apiErr });
+      return { success: false, ...apiErr };
+    }
   },
 
   /**

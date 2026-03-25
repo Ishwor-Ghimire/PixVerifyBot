@@ -20,7 +20,7 @@ const MESSAGES = {
     '5️⃣ Wait for the link to be generated',
     '',
     '📸 *Where to find TOTP?*',
-    '• For photo-by-photo instructions on how to get your TOTP key, visit: https://pixverify.netlify.app',
+    '• 1. Google Account → Security → 2-Step Verification → Authenticator\n2. Click "Can\'t scan it ? " for the Base32 key\n3. Paste the full key (spaces auto-removed)',
     '',
     '*Commands:*',
     '• /run — Start verification',

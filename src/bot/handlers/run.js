@@ -234,16 +234,24 @@ async function handleConfirm(bot, query) {
     // Handle result
     if (result.success) {
       const elapsed = result.elapsed ? formatDuration(result.elapsed) : formatDuration((Date.now() - localStartTime) / 1000);
+      const existingResultNote = result.reusedResult
+        ? [
+            '',
+            '♻️ Existing result found for this email.',
+            result.processedAt ? `🕒 Original result: ${result.processedAt}` : null,
+            result.noCharge ? '💰 No credit was deducted.' : null,
+          ].filter(Boolean).join('\n')
+        : '';
       try {
         await bot.editMessageText(
-          `${MESSAGES.RUN_SUCCESS}\n\n\`${result.url}\`\n\n⏱️ Completed in ${elapsed}`,
+          `${MESSAGES.RUN_SUCCESS}\n\n\`${result.url}\`\n\n⏱️ Completed in ${elapsed}${existingResultNote}`,
           { chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
         );
       } catch (editErr) {
         logger.warn('Could not update success message', { userId, error: editErr.message });
         try {
           await bot.sendMessage(chatId,
-            `${MESSAGES.RUN_SUCCESS}\n\n\`${result.url}\`\n\n⏱️ Completed in ${elapsed}`,
+            `${MESSAGES.RUN_SUCCESS}\n\n\`${result.url}\`\n\n⏱️ Completed in ${elapsed}${existingResultNote}`,
             { parse_mode: 'Markdown' }
           );
         } catch {}
@@ -337,6 +345,8 @@ function getReadableError(code) {
     URL_CAPTURE_FAILED: '🔗 Failed to capture the verification URL. Please try again.',
     ACCOUNT_NOT_DETECTED: '📧 Account was not detected during sign-in. Please verify the email.',
     BROWSER_LOGIN_FAILED: '🌐 Browser login failed. Please try again later.',
+    PROXY_ERROR: '🌐 Proxy error while processing the account. Please try again later.',
+    DEVICE_UNAVAILABLE: '📱 No processing device is currently available. Please try again shortly.',
     PHONE_VERIFICATION: '📱 Phone verification required. This is not supported.',
     RECOVERY_EMAIL: '📧 Recovery email verification required. Not supported.',
     UNUSUAL_ACTIVITY: '⚠️ Google flagged unusual activity. Try again later.',

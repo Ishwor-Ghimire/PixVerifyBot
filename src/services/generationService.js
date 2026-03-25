@@ -44,6 +44,48 @@ const GenerationService = {
         // Handle specific API rejection codes
         const errorCode = submission.code;
 
+        if (errorCode === 'ALREADY_PROCESSED') {
+          let existingUrl = submission.url || '';
+          let processedAt = submission.created_at || '';
+
+          if (!existingUrl) {
+            const existingResult = await GoogleOneClient.getResultByEmail(email);
+            if (existingResult.success && existingResult.url) {
+              existingUrl = existingResult.url;
+              processedAt = existingResult.created_at || processedAt;
+            }
+          }
+
+          if (existingUrl) {
+            Generation.updateStatus(generationId, {
+              status: 'success',
+              resultUrl: existingUrl,
+            });
+
+            // The upstream API returns HTTP 409 for reused results, so mirror that as no-charge locally.
+            if (!isAdmin) {
+              CreditService.refundCredits(telegramUserId, 1);
+            }
+
+            logger.info('Generation reused existing result', {
+              generationId,
+              telegramUserId,
+              email,
+              processedAt,
+            });
+
+            return {
+              success: true,
+              generationId,
+              url: existingUrl,
+              elapsed: 0,
+              reusedResult: true,
+              processedAt,
+              noCharge: !isAdmin,
+            };
+          }
+        }
+
         Generation.updateStatus(generationId, {
           status: 'failed',
           errorCode,
