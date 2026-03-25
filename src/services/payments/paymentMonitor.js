@@ -218,14 +218,18 @@ const PaymentMonitor = {
     const deposit = await BinanceApiClient.findMatchingDeposit(expectedAmount, orderTimestampMs, usedRefs);
     if (!deposit) return;
 
-    const reference = `binance_deposit_${deposit.txId}`;
+    // Use appropriate reference prefix based on where the match came from
+    const reference = deposit.source === 'pay_transactions'
+      ? `binance_pay_${deposit.txId}`
+      : `binance_deposit_${deposit.txId}`;
     const confirmed = await this.confirmPurchase(purchase, reference);
     if (!confirmed) return;
 
-    logger.info('Binance deposit payment auto-confirmed', {
+    logger.info('Binance payment auto-confirmed', {
       purchaseId: purchase.id,
       txId: deposit.txId,
       amount: deposit.amount,
+      source: deposit.source,
       network: deposit.network,
     });
   },

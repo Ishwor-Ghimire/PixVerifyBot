@@ -236,35 +236,100 @@ const BinanceApiClient = {
   },
 
   /**
-   * Find a matching USDT deposit for the expected unique amount.
-   * Compares against deposits from the deposit history API.
+   * Find a matching incoming Binance Pay transaction by unique amount.
+   * Uses the Pay transactions API (/sapi/v1/pay/transactions).
    *
    * @param {number} expectedAmount - The unique amount to match
-   * @param {number} afterTimestampMs - Only consider deposits after this time (ms)
-   * @param {Set<string>} [excludeRefs] - txId references to skip (already used by other orders)
-   * @returns {object|null} { txId, amount, insertTime } or null
+   * @param {number} afterTimestampMs - Only consider transactions after this time (ms)
+   * @param {Set<string>} [excludeRefs] - References to skip (already used by other orders)
+   * @returns {object|null} { txId, amount, time } or null
    */
-  async findMatchingDeposit(expectedAmount, afterTimestampMs, excludeRefs = null) {
-    const deposits = await this.getDepositHistory(120);
-    const tolerance = 0.0005; // Half the 0.001 step — prevents adjacent amount overlap
+  async findMatchingPayTransaction(expectedAmount, afterTimestampMs, excludeRefs = null) {
+    const transactions = await this.getPayTransactions(120);
+    const tolerance = 0.0005;
 
-    if (deposits.length > 0) {
-      logger.info('Binance findMatchingDeposit comparing', {
+    if (transactions.length > 0) {
+      logger.info('Binance findMatchingPayTransaction comparing', {
         expectedAmount,
         tolerance,
-        depositCount: deposits.length,
-        depositAmounts: deposits.slice(0, 10).map(d => parseFloat(d.amount)),
+        transactionCount: transactions.length,
+        transactionAmounts: transactions.slice(0, 10).map(t => parseFloat(t.amount || t.totalAmount || '0')),
       });
     }
 
+    for (const tx of transactions) {
+      // Determine the transaction ID — try all known field names
+      const txId = String(
+        tx.orderNumber || tx.transactionId || tx.orderId || tx.bizId ||
+        tx.merchantTradeNo || tx.prepayId || tx.tradeId || ''
+      ).trim();
+
+      if (!txId) continue;
+
+      // Time filter — use transactionTime or createTime (both in ms)
+      const txTimeMs = tx.transactionTime || tx.createTime || 0;
+      if (afterTimestampMs && txTimeMs < afterTimestampMs) {
+        continue;
+      }
+
+      // Skip already-used transactions
+      const txRef = `binance_pay_${txId}`;
+      if (excludeRefs && excludeRefs.has(txRef)) {
+        continue;
+      }
+
+      const receivedAmount = parseFloat(tx.amount || tx.totalAmount || '0');
+
+      // Only match incoming (positive) amounts
+      if (receivedAmount <= 0) continue;
+
+      const diff = Math.abs(receivedAmount - expectedAmount);
+      if (diff < tolerance) {
+        logger.info('Binance Pay transaction MATCH found', {
+          txId,
+          receivedAmount,
+          expectedAmount,
+          diff,
+          currency: tx.currency || tx.orderCurrency,
+        });
+        return {
+          txId,
+          amount: receivedAmount,
+          time: txTimeMs,
+        };
+      }
+    }
+
+    return null;
+  },
+
+  /**
+   * Find a matching USDT deposit for the expected unique amount.
+   * Tries Pay transactions first (internal Binance Pay transfers),
+   * then falls back to deposit history (on-chain deposits).
+   *
+   * @param {number} expectedAmount - The unique amount to match
+   * @param {number} afterTimestampMs - Only consider items after this time (ms)
+   * @param {Set<string>} [excludeRefs] - References to skip (already used by other orders)
+   * @returns {object|null} { txId, amount, source } or null
+   */
+  async findMatchingDeposit(expectedAmount, afterTimestampMs, excludeRefs = null) {
+    // Try 1: Pay transactions API (internal Binance Pay transfers)
+    const payMatch = await this.findMatchingPayTransaction(expectedAmount, afterTimestampMs, excludeRefs);
+    if (payMatch) {
+      return { ...payMatch, source: 'pay_transactions' };
+    }
+
+    // Try 2: Deposit history API (on-chain deposits)
+    const deposits = await this.getDepositHistory(120);
+    const tolerance = 0.0005;
+
     for (const deposit of deposits) {
-      // Use insertTime (always present, in ms) for time filtering
       const depositTimeMs = deposit.insertTime || 0;
       if (afterTimestampMs && depositTimeMs < afterTimestampMs) {
         continue;
       }
 
-      // Skip already-used deposits
       const depositRef = `binance_deposit_${deposit.txId}`;
       if (excludeRefs && excludeRefs.has(depositRef)) {
         continue;
@@ -274,7 +339,7 @@ const BinanceApiClient = {
       const diff = Math.abs(depositAmount - expectedAmount);
 
       if (diff < tolerance) {
-        logger.info('Binance deposit MATCH found', {
+        logger.info('Binance deposit MATCH found (on-chain)', {
           txId: deposit.txId,
           depositAmount,
           expectedAmount,
@@ -286,6 +351,7 @@ const BinanceApiClient = {
           amount: depositAmount,
           insertTime: depositTimeMs,
           network: deposit.network,
+          source: 'deposit_history',
         };
       }
     }

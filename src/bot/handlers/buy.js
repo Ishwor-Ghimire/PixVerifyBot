@@ -502,7 +502,7 @@ async function handleBinanceIvePaid(bot, chatId, userId, orderId, messageId) {
 
   // Only attempt auto-scan if API credentials are configured
   if (BinanceApiClient.isConfigured()) {
-    await bot.sendMessage(chatId, '⏳ Scanning Binance deposit history for your payment...');
+    await bot.sendMessage(chatId, '⏳ Scanning Binance for your payment...');
 
     const expectedAmount = parseFloat(purchase.unique_amount);
     const createdAtUtc = purchase.created_at.endsWith('Z') ? purchase.created_at : purchase.created_at.replace(' ', 'T') + 'Z';
@@ -513,7 +513,9 @@ async function handleBinanceIvePaid(bot, chatId, userId, orderId, messageId) {
 
     if (deposit) {
       // Auto-confirm!
-      const reference = `binance_deposit_${deposit.txId}`;
+      const reference = deposit.source === 'pay_transactions'
+        ? `binance_pay_${deposit.txId}`
+        : `binance_deposit_${deposit.txId}`;
       const confirmation = PaymentService.confirmPayment(orderId, reference);
 
       // Clear any pending manual verification for this user
