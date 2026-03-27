@@ -193,6 +193,7 @@ async function showStats(bot, chatId, messageId) {
     '',
     '👥 *Users*',
     `• Total Users: *${userStats.totalUsers}*`,
+    `• Monthly Active: *${userStats.monthlyUsers}*`,
     `• Outstanding Credits: *${userStats.outstandingCredits}*`,
     '',
     '💰 *Revenue & Sales*',

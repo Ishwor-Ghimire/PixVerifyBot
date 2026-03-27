@@ -14,7 +14,7 @@ const User = {
 
     if (existing) {
       db.prepare(
-        'UPDATE users SET last_active_at = datetime(\'now\'), username = ?, first_name = ? WHERE telegram_user_id = ?'
+        'UPDATE users SET last_active_at = strftime(\'%Y-%m-%dT%H:%M:%SZ\',\'now\'), username = ?, first_name = ? WHERE telegram_user_id = ?'
       ).run(telegramUser.username || null, telegramUser.first_name || null, telegramUser.id);
       return { ...existing, isNew: false };
     }
@@ -59,7 +59,7 @@ const User = {
 
   setLastActive(telegramUserId) {
     return getDb().prepare(
-      'UPDATE users SET last_active_at = datetime(\'now\') WHERE telegram_user_id = ?'
+      'UPDATE users SET last_active_at = strftime(\'%Y-%m-%dT%H:%M:%SZ\',\'now\') WHERE telegram_user_id = ?'
     ).run(telegramUserId);
   },
 
@@ -74,12 +74,20 @@ const User = {
     const row = getDb().prepare(`
       SELECT 
         COUNT(*) as total_users,
-        SUM(credit_balance) as outstanding_credits
+        SUM(credit_balance) as outstanding_credits,
+        SUM(
+          CASE
+            WHEN REPLACE(REPLACE(last_active_at, ' ', 'T'), 'Z', '') || 'Z' >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-30 days')
+            THEN 1
+            ELSE 0
+          END
+        ) as monthly_users
       FROM users
     `).get();
     
     return {
       totalUsers: row.total_users || 0,
+      monthlyUsers: row.monthly_users || 0,
       outstandingCredits: row.outstanding_credits || 0,
     };
   },

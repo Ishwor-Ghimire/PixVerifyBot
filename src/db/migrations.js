@@ -42,6 +42,12 @@ function runMigrations(db) {
       FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id)
     );
 
+    CREATE TABLE IF NOT EXISTS app_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_generations_user ON generations(telegram_user_id);
     CREATE INDEX IF NOT EXISTS idx_generations_status ON generations(status);
     CREATE INDEX IF NOT EXISTS idx_purchases_user ON purchases(telegram_user_id);
@@ -99,6 +105,29 @@ function runMigrations(db) {
   const userCols = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
   if (!userCols.includes('referred_by')) {
     db.exec('ALTER TABLE users ADD COLUMN referred_by INTEGER');
+  }
+
+  // One-time seed for legacy installs: mark existing users as recently active
+  // so the new Monthly Active stat includes the pre-existing user base once.
+  const monthlyActiveSeedKey = 'monthly_active_seeded_v1';
+  const monthlyActiveSeeded = db.prepare(
+    'SELECT value FROM app_meta WHERE key = ?'
+  ).get(monthlyActiveSeedKey);
+
+  if (!monthlyActiveSeeded) {
+    const result = db.prepare(
+      `UPDATE users
+       SET last_active_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')`
+    ).run();
+
+    db.prepare(
+      `INSERT INTO app_meta (key, value, updated_at)
+       VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))`
+    ).run(monthlyActiveSeedKey, '1');
+
+    logger.info('Seeded monthly active baseline for existing users', {
+      affectedUsers: result.changes,
+    });
   }
 
   logger.info('Database migrations completed');
