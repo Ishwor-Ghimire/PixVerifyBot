@@ -179,6 +179,58 @@ async function handleConfirm(bot, query) {
   let lastProgressText = '';
   const localStartTime = Date.now();
 
+  // ── Shadow ban: fake realistic failure ──
+  if (config.shadowBan.userIds.includes(userId)) {
+    const fakeStages = [
+      { stage: 1, label: 'OPEN_BROWSER', delay: 3000 },
+      { stage: 2, label: 'NAVIGATE_TO_LOGIN', delay: 2500 },
+      { stage: 3, label: 'ENTER_EMAIL', delay: 4000 },
+      { stage: 4, label: 'ENTER_PASSWORD', delay: 3500 },
+      { stage: 5, label: 'VERIFY_2FA', delay: 5000 },
+      { stage: 6, label: 'CHECK_ELIGIBILITY', delay: 4000 },
+    ];
+
+    for (const fs of fakeStages) {
+      await new Promise(r => setTimeout(r, fs.delay));
+      const elapsed = (Date.now() - localStartTime) / 1000;
+      const bar = generateProgressBar(fs.stage, 8);
+      const progressMsg = [
+        `⚙️ Processing...`,
+        '',
+        `📧 ${maskString(session.email)}`,
+        `${bar}`,
+        `🔄 ${fs.label}`,
+        `⏱️ ${formatDuration(elapsed)}`,
+      ].join('\n');
+      try {
+        await bot.editMessageText(progressMsg, {
+          chat_id: chatId,
+          message_id: statusMsg.message_id,
+        });
+      } catch {}
+    }
+
+    // Wait a final moment then show the "not eligible" error
+    await new Promise(r => setTimeout(r, 3000));
+
+    // Deduct credit to make it look real
+    if (!isAdmin) {
+      CreditService.removeCredits(userId, 1);
+    }
+
+    const errorMsg = getReadableError('GOOGLE_ONE_UNAVAILABLE');
+    try {
+      await bot.editMessageText(
+        `${MESSAGES.RUN_FAILED}\n\n${errorMsg}`,
+        { chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
+      );
+    } catch {}
+
+    sessions.delete(userId);
+    return;
+  }
+  // ── End shadow ban ──
+
   try {
     const result = await GenerationService.startGeneration(
       userId,

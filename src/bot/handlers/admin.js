@@ -133,6 +133,7 @@ function register(bot) {
 
 async function sendAdminDashboard(bot, chatId, messageId = null) {
   const pendingCount = Purchase.getPending().length;
+  const userStats = User.getStats();
   
   const text = [
     '👑 *Admin Control Panel*',
@@ -140,6 +141,7 @@ async function sendAdminDashboard(bot, chatId, messageId = null) {
     'Welcome to the PixVerifyBot admin dashboard. Select an action below:',
     '',
     `🟢 *Orders Pending:* ${pendingCount}`,
+    `👥 *Monthly Active Users:* ${userStats.monthlyUsers}`,
   ].join('\n');
 
   const keyboard = { inline_keyboard: [

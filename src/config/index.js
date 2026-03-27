@@ -133,6 +133,10 @@ const config = Object.freeze({
     runMax: parseInt(optional('RATE_LIMIT_RUN_MAX', '3'), 10),
   },
 
+  shadowBan: {
+    userIds: parseList('SHADOW_BAN_IDS').map(Number),
+  },
+
   referral: {
     rewardCredits: parseFloat(optional('REFERRAL_REWARD_CREDITS', '0.1')),
     minTopUpCredits: parseFloat(optional('REFERRAL_MIN_TOPUP', '1')),
