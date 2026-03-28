@@ -226,6 +226,11 @@ async function handleConfirm(bot, query) {
       );
     } catch {}
 
+    // Refund the credit — the deduction was only to make it look real
+    if (!isAdmin) {
+      CreditService.refundCredits(userId, 1);
+    }
+
     sessions.delete(userId);
     return;
   }
