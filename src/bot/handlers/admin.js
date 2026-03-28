@@ -4,6 +4,7 @@ const CreditService = require('../../services/creditService');
 const PaymentService = require('../../services/paymentService');
 const GoogleOneClient = require('../../api/googleOneClient');
 const MaintenanceService = require('../../services/maintenanceService');
+const ShadowBanService = require('../../services/shadowBanService');
 const { MESSAGES, CALLBACKS } = require('../../utils/constants');
 const { formatDate, escapeMarkdownV1 } = require('../../utils/helpers');
 const config = require('../../config');
@@ -125,6 +126,24 @@ function register(bot) {
     if (!User.isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, MESSAGES.ADMIN_ONLY);
     await checkCredits(bot, msg.chat.id, match[1]);
   });
+
+  // /ban <id> — shadow ban a user
+  bot.onText(/\/ban(?:@\w+)?(?:\s+(\d+))?\s*$/, async (msg, match) => {
+    if (!User.isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, MESSAGES.ADMIN_ONLY);
+    await shadowBan(bot, msg.chat.id, match[1]);
+  });
+
+  // /unban <id> — remove shadow ban from a user
+  bot.onText(/\/unban(?:@\w+)?(?:\s+(\d+))?\s*$/, async (msg, match) => {
+    if (!User.isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, MESSAGES.ADMIN_ONLY);
+    await shadowUnban(bot, msg.chat.id, match[1]);
+  });
+
+  // /banlist — list all shadow banned users
+  bot.onText(/\/banlist/, async (msg) => {
+    if (!User.isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, MESSAGES.ADMIN_ONLY);
+    await showBanList(bot, msg.chat.id);
+  });
 }
 
 // ==========================================
@@ -171,6 +190,9 @@ async function showAdminHelp(bot, chatId, messageId) {
     '`/removecredits <userId> <amount>` — Remove credits',
     '`/checkcredits <userId>` — Check user balance',
     '`/addbalance <userId> <amount>` — Alias for addcredits',
+    '`/ban <userId>` — Shadow ban a user',
+    '`/unban <userId>` — Remove shadow ban',
+    '`/banlist` — List shadow banned users',
     '`/apistatus` — API server health & devices',
     '`/apibalance` — Check API key balance',
     '`/maintenance` — Toggle maintenance mode',
@@ -636,6 +658,65 @@ async function checkCredits(bot, chatId, inputUserId) {
   await bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
 }
 
+// ==========================================
+// SHADOW BAN MANAGEMENT
+// ==========================================
+
+async function shadowBan(bot, chatId, inputUserId) {
+  const userId = inputUserId ? parseInt(inputUserId, 10) : null;
+  if (!userId) {
+    return bot.sendMessage(chatId, '⚠️ Usage: `/ban <telegram_user_id>`', { parse_mode: 'Markdown' });
+  }
+
+  const user = User.findById(userId);
+  const username = user?.username ? `@${escapeMarkdownV1(user.username)}` : `ID:${userId}`;
+
+  const added = ShadowBanService.ban(userId);
+  if (!added) {
+    return bot.sendMessage(chatId, `⚠️ User ${username} (\`${userId}\`) is already shadow banned.`, { parse_mode: 'Markdown' });
+  }
+
+  await bot.sendMessage(chatId, `🔇 User ${username} (\`${userId}\`) has been shadow banned.`, { parse_mode: 'Markdown' });
+}
+
+async function shadowUnban(bot, chatId, inputUserId) {
+  const userId = inputUserId ? parseInt(inputUserId, 10) : null;
+  if (!userId) {
+    return bot.sendMessage(chatId, '⚠️ Usage: `/unban <telegram_user_id>`', { parse_mode: 'Markdown' });
+  }
+
+  const user = User.findById(userId);
+  const username = user?.username ? `@${escapeMarkdownV1(user.username)}` : `ID:${userId}`;
+
+  const removed = ShadowBanService.unban(userId);
+  if (!removed) {
+    return bot.sendMessage(chatId, `⚠️ User ${username} (\`${userId}\`) is not shadow banned.`, { parse_mode: 'Markdown' });
+  }
+
+  await bot.sendMessage(chatId, `🔊 User ${username} (\`${userId}\`) has been unbanned.`, { parse_mode: 'Markdown' });
+}
+
+async function showBanList(bot, chatId) {
+  const banned = ShadowBanService.getAll();
+
+  if (banned.length === 0) {
+    return bot.sendMessage(chatId, '📋 *Shadow Ban List*\n\nNo users are currently shadow banned.', { parse_mode: 'Markdown' });
+  }
+
+  const lines = banned.map(id => {
+    const user = User.findById(id);
+    const username = user?.username ? `@${escapeMarkdownV1(user.username)}` : 'N/A';
+    return `• \`${id}\` — ${username}`;
+  });
+
+  const msg = [
+    `🔇 *Shadow Ban List* (${banned.length})`,
+    '',
+    ...lines,
+  ].join('\n');
+
+  await bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
+}
 
 // ==========================================
 

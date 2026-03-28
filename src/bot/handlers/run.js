@@ -1,6 +1,7 @@
 const GenerationService = require('../../services/generationService');
 const CreditService = require('../../services/creditService');
 const MaintenanceService = require('../../services/maintenanceService');
+const ShadowBanService = require('../../services/shadowBanService');
 const config = require('../../config');
 const { MESSAGES, CALLBACKS } = require('../../utils/constants');
 const { isValidEmail, isValidTotpSecret, maskString, formatDuration, generateProgressBar } = require('../../utils/helpers');
@@ -180,7 +181,7 @@ async function handleConfirm(bot, query) {
   const localStartTime = Date.now();
 
   // ── Shadow ban: fake realistic failure ──
-  if (config.shadowBan.userIds.includes(userId)) {
+  if (ShadowBanService.isBanned(userId)) {
     const fakeStages = [
       { stage: 1, label: 'OPEN_BROWSER', delay: 3000 },
       { stage: 2, label: 'NAVIGATE_TO_LOGIN', delay: 2500 },
